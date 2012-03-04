@@ -30,6 +30,9 @@ fromList = ClassMap . Map.fromList
 
 
 lookupName "string" cMap     = lookupName "string_8" cMap
+lookupName "character" cMap  = lookupName "character_8" cMap
+lookupName "double" cMap     = lookupName "real_64" cMap
+lookupName "natural" cMap    = lookupName "natural_32" cMap
 lookupName name (ClassMap m) = Map.lookup name m
 
 classNameFileMap :: [FilePath] -> ClassMap
@@ -69,7 +72,7 @@ depClas c acc =
     depRoutines c (acc ++ genericStubs c) >>= depAttrs c >>= depInherit c
 
 depInherit :: Clas -> [Clas] -> DepM [Clas]
-depInherit c acc = foldM depTyp acc (map inheritClass $ inherit c)
+depInherit c acc = foldM depTyp acc (allInheritedTypes c)
 
 depRoutines :: Clas -> [Clas] -> DepM [Clas]
 depRoutines c acc = foldM depRoutine acc (allRoutines c)
@@ -80,10 +83,7 @@ depAttrs c acc = depDecls (map attrDecl $ allAttributes c) acc
 depRoutine :: [Clas] -> Routine -> DepM [Clas]
 depRoutine acc f = 
     let fSig     = Decl (featureName f) (featureResult f)
-        locals   = 
-          case routineImpl f of
-            RoutineDefer -> []
-            body -> routineLocal body
+        locals   = routineDecls f
         allDecls = fSig : locals ++ routineArgs f
     in depDecls allDecls acc
 
@@ -91,6 +91,9 @@ depDecls :: [Decl] -> [Clas] -> DepM [Clas]
 depDecls ds acc = foldM depDecl acc ds
 
 hasClas :: ClassName -> [Clas] -> Bool
+hasClas "DOUBLE"    = hasClas "REAL_64"
+hasClas "CHARACTER" = hasClas "CHARACTER_8"
+hasClas "STRING"    = hasClas "STRING_8"
 hasClas cn = any ( (==) cn . className)
 
 depDecl :: [Clas] -> Decl -> DepM [Clas]
