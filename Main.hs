@@ -1,32 +1,32 @@
 module Main where
 
-import Control.Exception
-
 import Data.List
 import qualified Data.Map as Map
 import Data.Map (Map)
 
 import Language.Eiffel.Parser.Parser
 import Language.Eiffel.Eiffel
-import qualified  Language.Eiffel.PrettyPrint as PP
-
+import qualified Language.Eiffel.PrettyPrint as PP
 import Language.Eiffel.TypeCheck.Class
 import Language.Eiffel.TypeCheck.TypedExpr as T
+
+import qualified Language.DemonL.AST as D
+import qualified Language.DemonL.Types as D
 
 import System.Directory
 import System.FilePath
 
 import DepGen
 
-src = ["/","home","scott","src"]
-local = ["/","home","scott","local"]
-library = local ++ ["Eiffel70","library"]
+srcPath = ["/","home","scott","src"]
+localPath = ["/","home","scott","local"]
+libraryPath = localPath ++ ["Eiffel70","library"]
 
 searchDirectories = 
   map joinPath 
-    [ src ++ ["eiffelbase2","trunk"]
-    , library ++ ["base","elks"]
-    , library ++ ["thread","classic"]
+    [ srcPath ++ ["eiffelbase2","trunk"]
+    , libraryPath ++ ["base","elks"]
+    , libraryPath ++ ["thread","classic"]
     ]
 
 main = do
@@ -53,8 +53,8 @@ main = do
 
 
 
-instrument env routineName = 
-  classMapRoutines (\r -> if featureName r == routineName
+instrument env routName = 
+  classMapRoutines (\r -> if featureName r == routName
                           then instrumentRoutine env r
                           else r)
 
@@ -66,54 +66,126 @@ instrumentRoutine env r =
 instrumentBody :: Env -> Contract TExpr 
                   -> RoutineBody TExpr -> RoutineBody TExpr
 instrumentBody env ens (RoutineBody locals localProc body) =
-  let body' = snd $ stmt env (contractClauses ens) body
+  let 
+    ensD = map (teToD . clauseExpr) (contractClauses ens)
+    body' = snd $ stmt env ensD  body
   in RoutineBody locals localProc body'
 instrumentBody _ _ r = r
 
-stmt :: Env -> [Clause TExpr] -> TStmt -> ([Clause TExpr], TStmt)
-stmt env ens stmt = 
-  let (cs, s) = stmt' env ens (contents stmt)
-  in (cs, attachEmptyPos s)
+stmt :: Env -> [D.Expr] -> TStmt -> ([D.Expr], TStmt)
+stmt env ens s = 
+  let (cs, s') = stmt' env ens (contents s)
+  in (cs, attachEmptyPos s')
 
 p0 = attachEmptyPos
 
 dummyExpr =
   let trg = p0 $ Var "mutex" (ClassType "MUTEX" []) 
       call = p0 $ Call trg "lock" [] NoType
-      stmt = p0 $ CallStmt call
-  in stmt
+      s = p0 $ CallStmt call
+  in s
      
 type Env = Map String ClasInterface
 
 block (cs, s) = (cs, Block s)
 
-replaceClause :: [Clause TExpr] -> TExpr -> TExpr -> [Clause TExpr]
+replaceClause :: [D.Expr] -> TExpr -> TExpr -> [D.Expr]
 replaceClause clauses old new = 
-  map ( \cls -> 
-         cls {clauseExpr = replaceExpr old new (clauseExpr cls)}) clauses
-
-replaceExpr :: TExpr -> TExpr -> TExpr -> TExpr
-replaceExpr new old = p0 . go . contents
+  map (replaceExpr (teToD old) (teToD new)) clauses
+  
+  
+replaceExpr :: D.Expr -> D.Expr -> D.Expr -> D.Expr
+replaceExpr new old = go
   where 
     rep = replaceExpr new old
-    go (T.Call trg name args t) = T.Call (rep trg) name (map rep args) t
-    go (T.Access trg name t)    = T.Access (rep trg) name t
-    go (T.BinOpExpr op e1 e2 t) = T.BinOpExpr op (rep e1) (rep e2) t
-    go (T.UnOpExpr op e t)      = T.UnOpExpr op (rep e) t
-    go (T.Attached mt e ms)     = T.Attached mt (rep e) ms
-    go (T.Box t e)              = T.Box t (rep e)
-    go (T.Unbox t e)            = T.Unbox t (rep e)
-    go (T.Cast t e)             = T.Cast t (rep e)
+    go (D.Call name args)     = D.Call name (map rep args)
+    go (D.Access trg name)    = D.Access (rep trg) name
+    go (D.BinOpExpr op e1 e2) = D.BinOpExpr op (rep e1) (rep e2)
+    go (D.UnOpExpr op e)      = D.UnOpExpr op (rep e)
     go e = e
 
-preCond :: Env -> TExpr -> [Clause TExpr]
+
+op1 Not = D.Not
+op1 Neg = D.Neg
+op1 Old = D.Old
+op1 Sqrt = error "teToD: unimpleneted Sqrt"
+    
+op2 Add = D.Add
+op2 Sub = D.Sub
+op2 Mul = D.Mul
+op2 Div = D.Div
+op2 Or  = D.Or
+op2 And = D.And
+op2 OrElse = D.Or
+op2 AndThen = D.And
+op2 Xor = D.RelOp D.Neq D.BoolType
+op2 Implies = D.Implies
+op2 (RelOp r _) = D.RelOp (rel r) D.NoType
+    
+rel Eq = D.Eq
+rel Neq = D.Neq
+rel Lte = D.Lte
+rel Lt = D.Lt
+rel Gt = D.Gt
+rel Gte = D.Gte
+rel TildeEq = D.Eq
+rel TildeNeq = D.Neq
+
+teToD :: TExpr -> D.Expr
+teToD te = go (contents te)
+  where
+    go (T.Call trg name args _) = D.Call name (teToD trg : map teToD args)
+    go (T.Access trg name _)    = D.Access (teToD trg) name
+    go (T.BinOpExpr op e1 e2 _) = D.BinOpExpr (op2 op) (teToD e1) (teToD e2)
+    go (T.UnOpExpr op e _)      = D.UnOpExpr (op1 op) (teToD e)
+    go (T.Attached _ e _)       =
+      let ClassType cn _ = texprTyp (contents e)
+          structType = D.StructType cn []
+      in D.BinOpExpr (D.RelOp D.Neq structType) (teToD e) D.LitNull
+    go (T.Box _ e)              = teToD e
+    go (T.Unbox _ e)            = teToD e
+    go (T.Cast _ e)             = teToD e
+    go (T.Var n _)     = D.Var n
+    go (T.ResultVar _) = D.ResultVar
+    go (T.LitInt i)    = D.LitInt i
+    go (T.LitBool b)   = D.LitBool b
+    go (T.LitVoid _)   = D.LitNull
+    go (T.LitChar _)   = error "teToD: unimplemented LitChar"
+    go (T.LitString _) = error "teToD: unimplemented LitString"
+    go (T.LitDouble _) = error "teToD: unimplemented LitDouble"
+
+-- eToD :: Expr -> D.Expr
+-- eToD te = go (contents te)
+--   where
+--     go (T.Call trg name args _) = D.Call name (eToD trg : map eToD args)
+--     go (T.Access trg name _)    = D.Access (eToD trg) name
+--     go (T.BinOpExpr op e1 e2 _) = D.BinOpExpr (op2 op) (eToD e1) (eToD e2)
+--     go (T.UnOpExpr op e _)      = D.UnOpExpr (op1 op) (eToD e)
+--     go (T.Attached _ e _)       =
+--       let ClassType cn _ = texprTyp (contents e)
+--           structType = D.StructType cn []
+--       in D.BinOpExpr (D.RelOp D.Neq structType) (eToD e) D.LitNull
+--     go (T.Box _ e)              = eToD e
+--     go (T.Unbox _ e)            = eToD e
+--     go (T.Cast _ e)             = eToD e
+--     go (T.Var n _)     = D.Var n
+--     go (T.ResultVar _) = D.ResultVar
+--     go (T.LitInt i)    = D.LitInt i
+--     go (T.LitBool b)   = D.LitBool b
+--     go (T.LitVoid _)   = D.LitNull
+--     go (T.LitChar _)   = error "eToD: unimplemented LitChar"
+--     go (T.LitString _) = error "eToD: unimplemented LitString"
+--     go (T.LitDouble _) = error "eToD: unimplemented LitDouble"
+
+
+preCond :: Env -> TExpr -> [D.Expr]
 preCond env e =
   let name = case texprTyp (contents e) of
         _ -> ""
       _n =  Map.lookup name env
   in []
 
-stmt' :: Env -> [Clause TExpr] -> UnPosTStmt -> ([Clause TExpr], UnPosTStmt)
+stmt' :: Env -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
 stmt' env ens = go
   where 
     go (Block ss) = 
@@ -126,4 +198,4 @@ stmt' env ens = go
       let pre = preCond env e
           ens' = pre ++ ens 
       in (ens' , CallStmt e)
-    go e = error (show e)
+--    go e = error (show e)
