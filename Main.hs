@@ -16,41 +16,25 @@ import qualified Language.DemonL.Types as D
 import System.Directory
 import System.FilePath
 
-import DepGen
-
-srcPath = ["/","home","scott","src"]
-localPath = ["/","home","scott","local"]
-libraryPath = localPath ++ ["Eiffel70","library"]
-
-searchDirectories = 
-  map joinPath 
-    [ srcPath ++ ["eiffelbase2","trunk"]
-    , libraryPath ++ ["base","elks"]
-    , libraryPath ++ ["thread","classic"]
-    ]
+import GenerateSummaries
 
 main = do
   currDir <- getCurrentDirectory
   let testDir = currDir </> "test"
   --  print searchDirectories
-  files <- collectFileMap (testDir : searchDirectories)
+  -- files <- collectFileMap (testDir : searchDirectories)
   -- print files
   classEi <- parseClassFile (testDir </> "work_queue.e")
   case classEi of
     Left e -> putStrLn (show e)
     Right cls -> do
-      classInterfacesEi <- depGenInt files (className cls)
+      classInts <- Map.elems `fmap` readAllSummaries -- depGenInt files (className cls)
       putStrLn "Generated dependencies"
-      case classInterfacesEi of
-        Left e -> putStrLn (show e) 
-        Right classInts -> 
-          case clasM classInts cls of
-            Left e -> print e
-            Right typedClass -> 
-              putStrLn (show $ PP.toDoc $ untype $ 
-                        instrument (clasMap classInts) "dequeue" typedClass)
-
-
+      case clasM classInts cls of
+        Left e -> print e
+        Right typedClass -> 
+          putStrLn (show $ PP.toDoc $ untype $ 
+                    instrument (clasMap classInts) "dequeue" typedClass)
 
 
 instrument env routName = 
@@ -68,13 +52,13 @@ instrumentBody :: Env -> Contract TExpr
 instrumentBody env ens (RoutineBody locals localProc body) =
   let 
     ensD = map (teToD . clauseExpr) (contractClauses ens)
-    body' = snd $ stmt env ensD  body
+    body' = snd $ stmt env [] ensD  body
   in RoutineBody locals localProc body'
 instrumentBody _ _ r = r
 
-stmt :: Env -> [D.Expr] -> TStmt -> ([D.Expr], TStmt)
-stmt env ens s = 
-  let (cs, s') = stmt' env ens (contents s)
+stmt :: Env -> [Decl] -> [D.Expr] -> TStmt -> ([D.Expr], TStmt)
+stmt env decls ens s = 
+  let (cs, s') = stmt' env decls ens (contents s)
   in (cs, attachEmptyPos s')
 
 p0 = attachEmptyPos
@@ -98,6 +82,7 @@ replaceExpr :: D.Expr -> D.Expr -> D.Expr -> D.Expr
 replaceExpr new old = go
   where 
     rep = replaceExpr new old
+    go e | e == old           = new
     go (D.Call name args)     = D.Call name (map rep args)
     go (D.Access trg name)    = D.Access (rep trg) name
     go (D.BinOpExpr op e1 e2) = D.BinOpExpr op (rep e1) (rep e2)
@@ -205,38 +190,68 @@ preCond env e = go (contents e)
     go (T.LitString _) = error "teToD: unimplemented LitString"
     go (T.LitDouble _) = error "teToD: unimplemented LitDouble"
 
-meldCall :: [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
-meldCall pre s = 
+meldCall :: [Decl] -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
+meldCall decls pre s = 
   let 
-    chk :: TStmt
-    chk = p0 $ Check 
-          [Clause Nothing 
-             (p0 $ T.LitString $ "condition: " ++ show (dConj $ nub $ pre))]
-  in (pre, Block [chk, p0 s])
+    tuple x y = p0 $ T.Tuple [x, y]
+    curr = p0 $ T.CurrentVar NoType
+    
+    string :: String -> T.TExpr
+    string name = p0 $ T.LitString name
+    
+    var name = p0 $ T.Var name NoType
+    
+    varTuple :: String -> T.TExpr
+    varTuple name = tuple (string name) (var name)
+    
+    array :: [T.TExpr] -> T.TExpr
+    array = p0 . T.LitArray
+    
+    rely :: [T.TExpr] -> T.TExpr
+    rely es = p0 $ T.Call curr "rely_call" es NoType
+    
+    precondStr = show $ dConj $ nub $ pre
+    
+    agent = p0 . T.Agent
+    
+    declTup (Decl n _) = varTuple n
+    
+    declArray :: T.TExpr
+    declArray = array (map declTup decls)
+    
+    args :: [T.TExpr]
+    args = [declArray, string precondStr]
+    
+    relyCall :: TStmt
+    relyCall = p0 $ E.CallStmt $ rely args
+  in (pre, Block [relyCall, p0 s])
 
-stmt' :: Env -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
-stmt' env ens = go
+stmt' :: Env -> [Decl] -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
+stmt' env decls ens = go
   where 
+    go :: UnPosTStmt -> ([D.Expr], UnPosTStmt)
     go (Block blkBody) = 
       let (cs, blkBody') = wpList ens blkBody -- mapAccumR (stmt env) ens ss
           wpList p [] = (p, [])
           wpList p (s:ss) = 
             let (p', ss') = wpList p ss
-                (p'', s') = stmt env p' s
+                (p'', s') = stmt env decls p' s
             in (p'', s':ss')
-      in meldCall cs (Block blkBody')
+      in meldCall decls cs (Block blkBody')
+    
     go (Assign trg src) =
       let newEns = replaceClause ens trg src
-      in meldCall newEns (Assign trg src)
+      in meldCall decls newEns (Assign trg src)
+    
     go (CallStmt e) =
       let pre = preCond env e
           ens' = pre ++ ens -- TODO: perform weakest precondition calculation
-      in meldCall ens' (CallStmt e)
+      in meldCall decls ens' (CallStmt e)
          
     -- TODO: Deal with until, invariant, and variant as well
     go (Loop from untl inv body var) =
       let 
-        (bodyCls, body') = stmt env ens body
-        (fromCls, from') = stmt env bodyCls from
-      in meldCall fromCls (Loop from' untl inv body' var)
+        (bodyCls, body') = stmt env decls ens body
+        (fromCls, from') = stmt env decls bodyCls from
+      in meldCall decls fromCls (Loop from' untl inv body' var)
     go e = error ("stmt'go: " ++ show e)

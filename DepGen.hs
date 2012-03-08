@@ -18,31 +18,6 @@ import System.FilePath
 import System.FilePath.Find
 
 
--- | Search the argument directories for all Eiffel files.
-collectEiffelFiles :: [FilePath] -> IO [FilePath]
-collectEiffelFiles dirs = do
-  pathLists <- mapM (find (return True) (extension ==? ".e")) dirs
-  return (concat pathLists)
-
-newtype ClassMap = ClassMap (Map String FilePath) deriving Show
-
-fromList = ClassMap . Map.fromList
-
-
-lookupName "string" cMap     = lookupName "string_8" cMap
-lookupName "character" cMap  = lookupName "character_8" cMap
-lookupName "double" cMap     = lookupName "real_64" cMap
-lookupName "natural" cMap    = lookupName "natural_32" cMap
-lookupName name (ClassMap m) = Map.lookup name m
-
-classNameFileMap :: [FilePath] -> ClassMap
-classNameFileMap = 
-  let fileAndPath file = (takeBaseName file, file)
-  in fromList . map fileAndPath
-
-collectFileMap :: [FilePath] -> IO ClassMap
-collectFileMap dirs = classNameFileMap `fmap` collectEiffelFiles dirs
-
 type DepM = ErrorT ParseError (ReaderT ClassMap IO)
 
 instance Error ParseError where
