@@ -44,7 +44,9 @@ genSummary :: String -> [FilePath] -> IO ()
 genSummary name pathes = do
   classesEi <- mapM ( \path -> print path >> parseClassFile path) pathes
   let classes = rights classesEi
+      errs = lefts classesEi
       interfaces = map clasInterface classes
+  print errs
   pwd <- getCurrentDirectory
   writeSummary (pwd </> name ++ ".eis") interfaces
 
@@ -58,7 +60,9 @@ readAllSummaries :: IO (Map ClassName ClasInterface)
 readAllSummaries = do
   pwd <- getCurrentDirectory
   summaryFiles <- searchSummaries pwd
-  interfaces :: [[ClasInterface]] <- rights `fmap` mapM parseSummary summaryFiles
+  summariesEi <- mapM parseSummary summaryFiles
+  let interfaces :: [[ClasInterface]] = rights summariesEi
+  putStrLn (show $ lefts $ summariesEi)
   return $ clasMap $ concat interfaces
 
 newtype ClassMap = ClassMap (Map String FilePath) deriving Show
