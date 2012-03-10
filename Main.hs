@@ -16,6 +16,7 @@ import qualified Language.DemonL.Types as D
 import System.Directory
 import System.FilePath
 
+import Domain
 import GenerateSummaries
 
 main = do
@@ -77,7 +78,6 @@ replaceClause :: [D.Expr] -> TExpr -> TExpr -> [D.Expr]
 replaceClause clauses old new = 
   map (replaceExpr (teToD old) (teToD new)) clauses
   
-  
 replaceExpr :: D.Expr -> D.Expr -> D.Expr -> D.Expr
 replaceExpr new old = go
   where 
@@ -89,57 +89,6 @@ replaceExpr new old = go
     go (D.UnOpExpr op e)      = D.UnOpExpr op (rep e)
     go e = e
 
-
-op1 Not = D.Not
-op1 Neg = D.Neg
-op1 Old = D.Old
-op1 Sqrt = error "teToD: unimpleneted Sqrt"
-    
-op2 Add = D.Add
-op2 Sub = D.Sub
-op2 Mul = D.Mul
-op2 Div = D.Div
-op2 Or  = D.Or
-op2 And = D.And
-op2 OrElse = D.Or
-op2 AndThen = D.And
-op2 Xor = D.RelOp D.Neq D.BoolType
-op2 Implies = D.Implies
-op2 (RelOp r _) = D.RelOp (rel r) D.NoType
-    
-rel Eq = D.Eq
-rel Neq = D.Neq
-rel Lte = D.Lte
-rel Lt = D.Lt
-rel Gt = D.Gt
-rel Gte = D.Gte
-rel TildeEq = D.Eq
-rel TildeNeq = D.Neq
-
-teToD :: TExpr -> D.Expr
-teToD te = go (contents te)
-  where
-    go (T.Call trg name args _) = D.Call name (teToD trg : map teToD args)
-    go (T.Access trg name _)    = D.Access (teToD trg) name
-    go (T.BinOpExpr op e1 e2 _) = D.BinOpExpr (op2 op) (teToD e1) (teToD e2)
-    go (T.UnOpExpr op e _)      = D.UnOpExpr (op1 op) (teToD e)
-    go (T.CurrentVar _)         = D.Var "this"
-    go (T.Attached _ e _)       =
-      let ClassType cn _ = texprTyp (contents e)
-          structType = D.StructType cn []
-      in D.BinOpExpr (D.RelOp D.Neq structType) (teToD e) D.LitNull
-    go (T.Box _ e)     = teToD e
-    go (T.Unbox _ e)   = teToD e
-    go (T.Cast _ e)    = teToD e
-    go (T.Var n _)     = D.Var n
-    go (T.ResultVar _) = D.ResultVar
-    go (T.LitInt i)    = D.LitInt i
-    go (T.LitBool b)   = D.LitBool b
-    go (T.LitVoid _)   = D.LitNull
-    go (T.LitChar _)   = error "teToD: unimplemented LitChar"
-    go (T.LitString _) = error "teToD: unimplemented LitString"
-    go (T.LitDouble _) = error "teToD: unimplemented LitDouble"
-    
 dNeqNull e =       
   let ClassType cn _ = texprTyp (contents e)
       structType = D.StructType cn []
