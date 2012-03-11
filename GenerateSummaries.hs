@@ -6,17 +6,18 @@ import Data.Either
 import qualified Data.Map as Map
 import Data.Map (Map)
 
-import Language.Eiffel.Eiffel
+import Language.Eiffel.Syntax
 import Language.Eiffel.Parser.Parser
 import Language.Eiffel.Summary
+import Language.Eiffel.Util
 
 import System.Directory
 import System.FilePath
 import System.FilePath.Find
 
-
-src = ["/","home","scott","src"]
-local = ["/","home","scott","local"]
+home = ["/","home","scott"]
+src = home ++ ["src"]
+local = home ++ ["local"]
 library = local ++ ["Eiffel70","library"]
 
 names = ["base2","base","thread","test"]
@@ -33,7 +34,9 @@ searchDirectories = zip names  $
 searchEiffelFiles :: FilePath -> IO [FilePath]
 searchEiffelFiles dir = findExt dir ".e"
  
-searchSummaries dir = findExt dir ".eis"                        
+searchSummaries dir = findExt dir ext
+
+ext = ".ebi"
 
 findExt dir ext = find (return True) (extension ==? ext) dir
                         
@@ -45,7 +48,7 @@ genSummary name pathes = do
       interfaces = map clasInterface classes
   print errs
   pwd <- getCurrentDirectory
-  writeSummary (pwd </> name ++ ".eis") interfaces
+  writeBinarySummary (pwd </> name ++ ext) interfaces
 
 genAllSummaries :: IO ()
 genAllSummaries =
@@ -57,7 +60,7 @@ readAllSummaries :: IO (Map ClassName ClasInterface)
 readAllSummaries = do
   pwd <- getCurrentDirectory
   summaryFiles <- searchSummaries pwd
-  summariesEi <- mapM parseSummary summaryFiles
-  let interfaces :: [[ClasInterface]] = rights summariesEi
-  putStrLn (show $ lefts $ summariesEi)
-  return $ clasMap $ concat interfaces
+  summaries <- mapM readBinarySummary summaryFiles
+  -- let interfaces :: [[ClasInterface]] = rights summariesEi
+  -- putStrLn (show $ lefts $ summariesEi)
+  return $ clasMap $ concat summaries
