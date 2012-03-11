@@ -2,7 +2,9 @@ module Domain where
 
 import Data.Either
 
-import Language.Eiffel.Eiffel as E
+import Language.Eiffel.Syntax as E
+import Language.Eiffel.Util
+import Language.Eiffel.Position
 import Language.Eiffel.TypeCheck.TypedExpr as T
 
 import Language.DemonL.AST as D

@@ -5,8 +5,11 @@ import qualified Data.Map as Map
 import Data.Map (Map)
 
 import Language.Eiffel.Parser.Parser
-import Language.Eiffel.Eiffel as E
+import Language.Eiffel.Syntax as E
+import Language.Eiffel.Util
+import Language.Eiffel.Position
 import qualified Language.Eiffel.PrettyPrint as PP
+
 import Language.Eiffel.TypeCheck.Class
 import Language.Eiffel.TypeCheck.TypedExpr as T
 
@@ -19,6 +22,7 @@ import System.FilePath
 import Domain
 import GenerateSummaries
 
+main :: IO ()
 main = do
   currDir <- getCurrentDirectory
   let testDir = currDir </> "test"
@@ -27,24 +31,26 @@ main = do
   -- print files
   classEi <- parseClassFile (testDir </> "work_queue.e")
   case classEi of
-    Left e -> putStrLn (show e)
+    Left e -> print e
     Right cls -> do
       classInts <- Map.elems `fmap` readAllSummaries -- depGenInt files (className cls)
       putStrLn "Generated dependencies"
       case clasM classInts cls of
         Left e -> print e
         Right typedClass -> 
-          putStrLn (show $ PP.toDoc $ untype $ 
+          print (PP.toDoc $ untype $ 
                     instrument (clasMap classInts) "dequeue" typedClass)
 
 
+instrument :: Env -> String -> AbsClas (RoutineBody TExpr) TExpr 
+              -> AbsClas (RoutineBody TExpr) TExpr
 instrument env routName = 
   classMapRoutines (\r -> if featureName r == routName
                           then instrumentRoutine env r
                           else r)
 
-instrumentRoutine :: Env -> AbsRoutine RoutineBody TExpr 
-                     -> AbsRoutine RoutineBody TExpr
+instrumentRoutine :: Env -> AbsRoutine (RoutineBody TExpr) TExpr 
+                     -> AbsRoutine (RoutineBody TExpr) TExpr
 instrumentRoutine env r = 
   r {routineImpl = instrumentBody env (routineEns r) (routineImpl r)}
 
@@ -62,8 +68,11 @@ stmt env decls ens s =
   let (cs, s') = stmt' env decls ens (contents s)
   in (cs, attachEmptyPos s')
 
+
+p0 :: a -> Pos a
 p0 = attachEmptyPos
 
+dummyExpr :: Pos (AbsStmt (Pos UnPosTExpr))
 dummyExpr =
   let trg = p0 $ Var "mutex" (ClassType "MUTEX" []) 
       call = p0 $ Call trg "lock" [] NoType
@@ -72,6 +81,7 @@ dummyExpr =
      
 type Env = Map String ClasInterface
 
+block :: (t, [PosAbsStmt a]) -> (t, AbsStmt a)
 block (cs, s) = (cs, Block s)
 
 replaceClause :: [D.Expr] -> TExpr -> TExpr -> [D.Expr]
@@ -89,6 +99,7 @@ replaceExpr new old = go
     go (D.UnOpExpr op e)      = D.UnOpExpr op (rep e)
     go e = e
 
+dNeqNull :: Pos UnPosTExpr -> D.Expr
 dNeqNull e =       
   let ClassType cn _ = texprTyp (contents e)
       structType = D.StructType cn []
@@ -104,24 +115,23 @@ texprClassName e =
 
 texprInterface :: Env -> TExpr -> ClasInterface
 texprInterface env e = 
-  case Map.lookup (texprClassName e) env of
-    Just ci -> ci
-    Nothing -> error $ "texprInterface: " ++ show e
+  fromMaybe (error $ "texprInterface: " ++ show e) 
+            (Map.lookup (texprClassName e) env)
 
 texprPre :: Env -> TExpr -> String -> [T.TExpr]
 texprPre env targ name = 
   let iface = texprInterface env targ
   in case typedPre (Map.elems env) iface name of
-    Right contract -> map (clauseExpr) (contractClauses contract)
+    Right contract -> map clauseExpr (contractClauses contract)
     Left e -> error $ "texprPre: " ++ e
 
 preCond :: Env -> TExpr -> [D.Expr]
-preCond env e = go (contents e)
+preCond env ex = go (contents ex)
   where
     go (T.Call trg name args _) = 
       let callPreTExpr = texprPre env trg name
           callPres = map teToD callPreTExpr
-      in dNeqNull trg : (concatMap (preCond env) (trg : args)) ++ callPres
+      in dNeqNull trg : concatMap (preCond env) (trg : args) ++ callPres
     go (T.Access trg name _)    = dNeqNull trg : preCond env trg
     go (T.BinOpExpr op e1 e2 _) = [] -- TODO: at least handle division by 0
     go (T.UnOpExpr op e _)      = [] -- TODO: lookup the operator
@@ -135,9 +145,10 @@ preCond env e = go (contents e)
     go (T.LitInt i)    = []
     go (T.LitBool b)   = []
     go (T.LitVoid _)   = []
-    go (T.LitChar _)   = error "teToD: unimplemented LitChar"
-    go (T.LitString _) = error "teToD: unimplemented LitString"
-    go (T.LitDouble _) = error "teToD: unimplemented LitDouble"
+    go (T.LitChar _)   = error "preCond: unimplemented LitChar"
+    go (T.LitString _) = error "preCond: unimplemented LitString"
+    go (T.LitDouble _) = error "preCond: unimplemented LitDouble"
+    go (T.Agent _)     = error "preCond: unimplemented Agent"
 
 meldCall :: [Decl] -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
 meldCall decls pre s = 
@@ -159,7 +170,7 @@ meldCall decls pre s =
     rely :: [T.TExpr] -> T.TExpr
     rely es = p0 $ T.Call curr "rely_call" es NoType
     
-    precondStr = show $ dConj $ nub $ pre
+    precondStr = show $ dConj $ nub pre
     
     agent = p0 . T.Agent
     
