@@ -1,8 +1,10 @@
 module Main where
 
+import Data.Either
 import Data.List
 import qualified Data.Map as Map
 import Data.Map (Map)
+import Data.Maybe
 
 import Language.Eiffel.Parser.Parser
 import Language.Eiffel.Syntax as E
@@ -19,6 +21,8 @@ import qualified Language.DemonL.Types as D
 import System.Directory
 import System.FilePath
 
+import ClassEnv
+import DepGen
 import Domain
 import GenerateSummaries
 
@@ -35,26 +39,32 @@ main = do
     Right cls -> do
       classInts <- Map.elems `fmap` readAllSummaries -- depGenInt files (className cls)
       putStrLn "Generated dependencies"
+      let unliked = rights (map (unlikeInterfaceM classInts) classInts)
+      let domainInts = either (error . show) id $ depGen (makeEnv unliked) "work_queue"
+      print (map className domainInts)
       case clasM classInts cls of
         Left e -> print e
-        Right typedClass -> 
-          print (PP.toDoc $ untype $ 
-                    instrument (clasMap classInts) "dequeue" typedClass)
+        Right typedClass ->
+          case typeInterfaces domainInts of
+            Left err -> print err
+            Right typedInts ->
+              print (PP.toDoc $ untype $ 
+                     instrument (makeEnv typedInts) "dequeue" typedClass)
 
 
-instrument :: Env -> String -> AbsClas (RoutineBody TExpr) TExpr 
+instrument :: TInterEnv -> String -> AbsClas (RoutineBody TExpr) TExpr 
               -> AbsClas (RoutineBody TExpr) TExpr
 instrument env routName = 
   classMapRoutines (\r -> if featureName r == routName
                           then instrumentRoutine env r
                           else r)
 
-instrumentRoutine :: Env -> AbsRoutine (RoutineBody TExpr) TExpr 
+instrumentRoutine :: TInterEnv -> AbsRoutine (RoutineBody TExpr) TExpr 
                      -> AbsRoutine (RoutineBody TExpr) TExpr
 instrumentRoutine env r = 
   r {routineImpl = instrumentBody env (routineEns r) (routineImpl r)}
 
-instrumentBody :: Env -> Contract TExpr 
+instrumentBody :: TInterEnv -> Contract TExpr 
                   -> RoutineBody TExpr -> RoutineBody TExpr
 instrumentBody env ens (RoutineBody locals localProc body) =
   let 
@@ -63,7 +73,7 @@ instrumentBody env ens (RoutineBody locals localProc body) =
   in RoutineBody locals localProc body'
 instrumentBody _ _ r = r
 
-stmt :: Env -> [Decl] -> [D.Expr] -> TStmt -> ([D.Expr], TStmt)
+stmt :: TInterEnv -> [Decl] -> [D.Expr] -> TStmt -> ([D.Expr], TStmt)
 stmt env decls ens s = 
   let (cs, s') = stmt' env decls ens (contents s)
   in (cs, attachEmptyPos s')
@@ -78,8 +88,6 @@ dummyExpr =
       call = p0 $ Call trg "lock" [] NoType
       s = p0 $ CallStmt call
   in s
-     
-type Env = Map String ClasInterface
 
 block :: (t, [PosAbsStmt a]) -> (t, AbsStmt a)
 block (cs, s) = (cs, Block s)
@@ -113,41 +121,43 @@ texprClassName e =
   let ClassType cn _ = texprTyp (contents e)
   in cn
 
-texprInterface :: Env -> TExpr -> ClasInterface
+texprInterface :: TInterEnv -> TExpr -> AbsClas EmptyBody T.TExpr
 texprInterface env e = 
   fromMaybe (error $ "texprInterface: " ++ show e) 
-            (Map.lookup (texprClassName e) env)
+            (envLookup (texprClassName e) env)
 
-texprPre :: Env -> TExpr -> String -> [T.TExpr]
+texprPre :: TInterEnv -> TExpr -> String -> [T.TExpr]
 texprPre env targ name = 
   let iface = texprInterface env targ
-  in case typedPre (Map.elems env) iface name of
-    Right contract -> map clauseExpr (contractClauses contract)
-    Left e -> error $ "texprPre: " ++ e
+  in case findFeature iface name of
+    Just rout -> map clauseExpr (contractClauses (routineReq rout))
+    Nothing -> error $ "texprPre: can't find routine"
 
-preCond :: Env -> TExpr -> [D.Expr]
+preCond :: TInterEnv -> TExpr -> [D.Expr]
 preCond env ex = go (contents ex)
   where
+    go' = go . contents
     go (T.Call trg name args _) = 
       let callPreTExpr = texprPre env trg name
           callPres = map teToD callPreTExpr
-      in dNeqNull trg : concatMap (preCond env) (trg : args) ++ callPres
-    go (T.Access trg name _)    = dNeqNull trg : preCond env trg
-    go (T.BinOpExpr op e1 e2 _) = [] -- TODO: at least handle division by 0
-    go (T.UnOpExpr op e _)      = [] -- TODO: lookup the operator
-    go (T.CurrentVar _)         = []
-    go (T.Attached _ e _)       = preCond env e
-    go (T.Box _ e)     = preCond env e
-    go (T.Unbox _ e)   = preCond env e
-    go (T.Cast _ e)    = preCond env e
-    go (T.Var n _)     = []
+      in dNeqNull trg : concatMap go' (trg : args) ++ callPres
+    go (T.Access trg _ _) = dNeqNull trg : go' trg
+    go (T.Old e) = go' e
+    go (T.CurrentVar _)      = []
+    go (T.Attached _ e _)    = go' e
+    go (T.Box _ e)     = go' e
+    go (T.Unbox _ e)   = go' e
+    go (T.Cast _ e)    = go' e
+    go (T.Var _ _)     = []
     go (T.ResultVar _) = []
-    go (T.LitInt i)    = []
-    go (T.LitBool b)   = []
+    go (T.LitInt _)    = []
+    go (T.LitBool _)   = []
     go (T.LitVoid _)   = []
     go (T.LitChar _)   = error "preCond: unimplemented LitChar"
     go (T.LitString _) = error "preCond: unimplemented LitString"
     go (T.LitDouble _) = error "preCond: unimplemented LitDouble"
+    go (T.LitArray _)  = error "preCond: unimplemented LitArray"
+    go (T.Tuple _)     = error "preCond: unimplemented Tuple"
     go (T.Agent _)     = error "preCond: unimplemented Agent"
 
 meldCall :: [Decl] -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
@@ -155,38 +165,38 @@ meldCall decls pre s =
   let 
     tuple x y = p0 $ T.Tuple [x, y]
     curr = p0 $ T.CurrentVar NoType
-    
+
     string :: String -> T.TExpr
     string name = p0 $ T.LitString name
-    
+
     var name = p0 $ T.Var name NoType
-    
+
     varTuple :: String -> T.TExpr
     varTuple name = tuple (string name) (var name)
-    
+
     array :: [T.TExpr] -> T.TExpr
     array = p0 . T.LitArray
-    
+
     rely :: [T.TExpr] -> T.TExpr
     rely es = p0 $ T.Call curr "rely_call" es NoType
-    
+
     precondStr = show $ dConj $ nub pre
-    
+
     agent = p0 . T.Agent
-    
+
     declTup (Decl n _) = varTuple n
-    
+
     declArray :: T.TExpr
     declArray = array (map declTup decls)
-    
+
     args :: [T.TExpr]
     args = [declArray, string precondStr]
-    
+
     relyCall :: TStmt
     relyCall = p0 $ E.CallStmt $ rely args
   in (pre, Block [relyCall, p0 s])
 
-stmt' :: Env -> [Decl] -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
+stmt' :: TInterEnv -> [Decl] -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
 stmt' env decls ens = go
   where 
     go :: UnPosTStmt -> ([D.Expr], UnPosTStmt)

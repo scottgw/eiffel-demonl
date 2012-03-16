@@ -16,7 +16,7 @@ feature {NON_EMPTY}
 			done := d
 		end
 
-	queue: V_LINKED_QUEUE [G]
+	queue: LINKED_QUEUE [G]
 	mutex: MUTEX
 
 feature {NONE}
@@ -26,7 +26,7 @@ feature {NONE}
 feature
 	make (non_empty: NON_EMPTY [G])
 		do
-			create queue
+			create queue.make
 			create mutex.make
 
 			done_or_not_empty := non_empty

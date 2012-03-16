@@ -1,14 +1,18 @@
-module DepGen (collectFileMap, depGen, depGenInt) where
+module DepGen (depGen) where
 
 import Control.Monad
 import Control.Monad.Error
+import Control.Monad.Identity
 import Control.Monad.Reader
 
 import Data.Char
+import Data.List
 import qualified Data.Map as Map
 import Data.Map (Map)
 
-import Language.Eiffel.Eiffel
+import Language.Eiffel.Syntax
+import Language.Eiffel.Position
+import Language.Eiffel.Util
 import Language.Eiffel.Parser.Parser
 
 import Text.Parsec.Error
@@ -17,64 +21,59 @@ import Text.Parsec.Pos
 import System.FilePath
 import System.FilePath.Find
 
+import ClassEnv
 
-type DepM = ErrorT ParseError (ReaderT ClassMap IO)
+type DepM = ErrorT ParseError (ReaderT InterEnv Identity)
 
 instance Error ParseError where
     strMsg s = newErrorMessage (Message s) (initialPos "NoFile") 
 
-depGen :: ClassMap -> ClassName -> IO (Either ParseError [Clas])
-depGen classMap = flip runReaderT classMap . runErrorT . flip depGen' []
+depGen :: InterEnv -> ClassName -> Either ParseError [ClasInterface]
+depGen classMap name = 
+  let dependencies = depGen' name []
+  in runIdentity (runReaderT (runErrorT dependencies) classMap)
 
-depGenInt :: ClassMap -> ClassName -> IO (Either ParseError [ClasInterface])
-depGenInt classMap = fmap (fmap (map clasInterface)) . depGen classMap
-
-depGen' :: ClassName -> [Clas] -> DepM [Clas]
+depGen' :: ClassName -> [ClasInterface] -> DepM [ClasInterface]
 depGen' cn acc = do
   classMap <- ask
-  let fileNameMb = lookupName (map toLower cn) classMap
-  newClass <- case fileNameMb of
+  let classMb = envLookup (map toLower cn) classMap
+  newClass <- case classMb of
     Nothing -> throwError (strMsg $ "couldn't find file for " ++ cn)
-    Just fileName -> do
-      lift (lift $ putStrLn fileName)
-      newClassEi <- lift (lift $ parseClassFile fileName)
-      either throwError return newClassEi
---  writeInterface (extractInterface newClass)
+    Just clas -> return clas
   depClas newClass (newClass:acc)
 
-depClas :: Clas -> [Clas] -> DepM [Clas]
+depClas :: ClasInterface -> [ClasInterface] -> DepM [ClasInterface]
 depClas c acc = 
-    depRoutines c (acc ++ genericStubs c) >>= depAttrs c >>= depInherit c
+    depFeatures c (acc ++ genericStubs c) >>= depAttrs c >>= depInherit c
 
-depInherit :: Clas -> [Clas] -> DepM [Clas]
+depInherit :: ClasInterface -> [ClasInterface] -> DepM [ClasInterface]
 depInherit c acc = foldM depTyp acc (allInheritedTypes c)
 
-depRoutines :: Clas -> [Clas] -> DepM [Clas]
-depRoutines c acc = foldM depRoutine acc (allRoutines c)
+depFeatures :: ClasInterface -> [ClasInterface] -> DepM [ClasInterface]
+depFeatures c acc = foldM depFeature acc (allFeatures c)
 
-depAttrs :: Clas -> [Clas] -> DepM [Clas]
-depAttrs c acc = depDecls (map attrDecl $ allAttributes c) acc
+depAttrs :: ClasInterface -> [ClasInterface] -> DepM [ClasInterface]
+depAttrs c = depDecls (map attrDecl $ allAttributes c)
 
-depRoutine :: [Clas] -> Routine -> DepM [Clas]
-depRoutine acc f = 
+depFeature :: [ClasInterface] -> FeatureEx -> DepM [ClasInterface]
+depFeature acc f = 
     let fSig     = Decl (featureName f) (featureResult f)
-        locals   = routineDecls f
-        allDecls = fSig : locals ++ routineArgs f
+        allDecls = fSig : featureArgs f
     in depDecls allDecls acc
 
-depDecls :: [Decl] -> [Clas] -> DepM [Clas]
+depDecls :: [Decl] -> [ClasInterface] -> DepM [ClasInterface]
 depDecls ds acc = foldM depDecl acc ds
 
-hasClas :: ClassName -> [Clas] -> Bool
+hasClas :: ClassName -> [ClasInterface] -> Bool
 hasClas "DOUBLE"    = hasClas "REAL_64"
 hasClas "CHARACTER" = hasClas "CHARACTER_8"
 hasClas "STRING"    = hasClas "STRING_8"
 hasClas cn = any ( (==) cn . className)
 
-depDecl :: [Clas] -> Decl -> DepM [Clas]
+depDecl :: [ClasInterface] -> Decl -> DepM [ClasInterface]
 depDecl acc (Decl _ t) = depTyp acc t
 
-depTyp :: [Clas] -> Typ -> DepM [Clas]
+depTyp :: [ClasInterface] -> Typ -> DepM [ClasInterface]
 depTyp acc (ClassType cn gs)
     | not (hasClas cn acc) = foldM depTyp acc gs >>= depGen' cn
     | otherwise = return acc

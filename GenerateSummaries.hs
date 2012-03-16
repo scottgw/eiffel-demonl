@@ -1,9 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-
 module GenerateSummaries where
 
 import Data.Either
-import qualified Data.Map as Map
 import Data.Map (Map)
 
 import Language.Eiffel.Syntax
@@ -15,29 +13,41 @@ import System.Directory
 import System.FilePath
 import System.FilePath.Find
 
-home = ["/","home","scott"]
-src = home ++ ["src"]
-local = home ++ ["local"]
-library = local ++ ["Eiffel70","library"]
+homeDir :: [String]
+homeDir = ["/","home","scott"]
 
+srcDir :: [String]
+srcDir = homeDir ++ ["src"]
+
+localDir :: [String]
+localDir = homeDir ++ ["local"]
+
+libraryDir :: [String]
+libraryDir = localDir ++ ["Eiffel70","library"]
+
+names :: [String]
 names = ["base2","base","thread","test"]
 
-searchDirectories = zip names  $
+searchDirectories :: [(String, FilePath)]
+searchDirectories = zip names $
   map joinPath 
-    [ src ++ ["eiffelbase2","trunk"]
-    , library ++ ["base","elks"]
-    , library ++ ["thread","classic"]
-    , src ++ ["eiffel-demonl"]
+    [ srcDir ++ ["eiffelbase2","trunk"]
+    , libraryDir ++ ["base","elks"]
+    , libraryDir ++ ["thread","classic"]
+    , srcDir ++ ["eiffel-demonl"]
     ]
 
 -- | Search the argument directories for all Eiffel files.
 searchEiffelFiles :: FilePath -> IO [FilePath]
 searchEiffelFiles dir = findExt dir ".e"
  
-searchSummaries dir = findExt dir ext
+searchSummaries :: FilePath -> IO [FilePath]
+searchSummaries dir = findExt dir ifaceExt
 
-ext = ".ebi"
+ifaceExt :: String
+ifaceExt = ".ebi"
 
+findExt :: FilePath -> FilePath -> IO [FilePath]
 findExt dir ext = find (return True) (extension ==? ext) dir
                         
 genSummary :: String -> [FilePath] -> IO ()
@@ -48,7 +58,7 @@ genSummary name pathes = do
       interfaces = map clasInterface classes
   print errs
   pwd <- getCurrentDirectory
-  writeBinarySummary (pwd </> name ++ ext) interfaces
+  writeBinarySummary (pwd </> name ++ ifaceExt) interfaces
 
 genAllSummaries :: IO ()
 genAllSummaries =
