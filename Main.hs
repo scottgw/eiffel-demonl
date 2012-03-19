@@ -40,7 +40,7 @@ main = do
       classInts <- Map.elems `fmap` readAllSummaries -- depGenInt files (className cls)
       putStrLn "Generated dependencies"
       let unliked = rights (map (unlikeInterfaceM classInts) classInts)
-      let domainInts = either (error . show) id $ depGen (makeEnv unliked) "work_queue"
+      let domainInts = either (error . show) id $ depGen (makeEnv classInts) "work_queue"
       print (map className domainInts)
       case clasM classInts cls of
         Left e -> print e
