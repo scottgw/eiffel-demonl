@@ -44,8 +44,8 @@ main = do
       print (map className domainInts)
       case clasM classInts cls of
         Left e -> print e
-        Right typedClass ->
-          case typeInterfaces domainInts of
+        Right typedClass -> typeInterfaces domainInts >>= \ typedDomain ->
+          case typedDomain of
             Left err -> print err
             Right typedInts ->
               print (PP.toDoc $ untype $ 
