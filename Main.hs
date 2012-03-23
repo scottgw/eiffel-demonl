@@ -39,7 +39,7 @@ main = do
     Right cls -> do
       classInts <- Map.elems `fmap` readAllSummaries -- depGenInt files (className cls)
       putStrLn "Generated dependencies"
-      let unliked = rights (map (unlikeInterfaceM classInts) classInts)
+      -- let unliked = rights (map (unlikeInterfaceM classInts) classInts)
       let domainInts = either (error . show) id $ depGen (makeEnv classInts) "work_queue"
       print (map className domainInts)
       case clasM classInts cls of
@@ -158,7 +158,7 @@ preCond env ex = go (contents ex)
     go (T.LitDouble _) = error "preCond: unimplemented LitDouble"
     go (T.LitArray _)  = error "preCond: unimplemented LitArray"
     go (T.Tuple _)     = error "preCond: unimplemented Tuple"
-    go (T.Agent _)     = error "preCond: unimplemented Agent"
+    go (T.Agent _ _ _ _) = error "preCond: unimplemented Agent"
 
 meldCall :: [Decl] -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
 meldCall decls pre s = 

@@ -79,7 +79,7 @@ teToD te = go (contents te)
     go (T.LitChar _)   = error "teToD: unimplemented LitChar"
     go (T.LitString _) = error "teToD: unimplemented LitString"
     go (T.LitDouble _) = error "teToD: unimplemented LitDouble"
-    go (T.Agent _)     = error "teToD: unimplemented Agent"
+    go (T.Agent _ _ _ _) = error "teToD: unimplemented Agent"
     go (T.Tuple _)     = error "teToD: unimplemented Tuple"
     go (T.LitArray _)  = error "teToD: unimplemented LitArray"
 
