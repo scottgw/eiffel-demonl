@@ -77,5 +77,6 @@ depTyp :: [ClasInterface] -> Typ -> DepM [ClasInterface]
 depTyp acc (ClassType cn gs)
     | not (hasClas cn acc) = foldM depTyp acc gs >>= depGen' cn
     | otherwise = return acc
+depTyp acc (TupleType _) = depTyp acc (ClassType "TUPLE" [])
 depTyp acc (Sep _ _ cn) = depTyp acc (ClassType cn [])
 depTyp acc _ = return acc
