@@ -25,55 +25,69 @@ import ClassEnv
 
 type DepM = ErrorT ParseError (ReaderT InterEnv Identity)
 
+data ClassOrGeneric = Class ClasInterface | Gen ClasInterface
+
 instance Error ParseError where
     strMsg s = newErrorMessage (Message s) (initialPos "NoFile") 
 
 depGen :: InterEnv -> ClassName -> Either ParseError [ClasInterface]
 depGen classMap name = 
   let dependencies = depGen' name []
-  in runIdentity (runReaderT (runErrorT dependencies) classMap)
+      justClasses [] = []
+      justClasses (Class c : cs) = c : justClasses cs
+      justClasses (_ : cs) = justClasses cs
+  in justClasses `fmap` 
+     runIdentity (runReaderT (runErrorT dependencies) classMap)
 
-depGen' :: ClassName -> [ClasInterface] -> DepM [ClasInterface]
+depGen' :: ClassName -> [ClassOrGeneric] -> DepM [ClassOrGeneric]
 depGen' cn acc = do
   classMap <- ask
   let classMb = envLookup (map toLower cn) classMap
   newClass <- case classMb of
     Nothing -> throwError (strMsg $ "couldn't find file for " ++ cn)
     Just clas -> return clas
-  depClas newClass (newClass:acc)
+  depClas newClass (Class newClass : acc)
 
-depClas :: ClasInterface -> [ClasInterface] -> DepM [ClasInterface]
+-- make the generic stubs another type of interface,
+-- so they can be filtered out at the end
+-- this will require that the typechecking side-readd the generics for
+-- each specific class
+depClas :: ClasInterface -> [ClassOrGeneric] -> DepM [ClassOrGeneric]
 depClas c acc = 
-    depFeatures c (acc ++ genericStubs c) >>= depAttrs c >>= depInherit c
+    depFeatures c (acc ++ map Gen (genericStubs c)) >>= 
+    depAttrs c >>= depInherit c
 
-depInherit :: ClasInterface -> [ClasInterface] -> DepM [ClasInterface]
+depInherit :: ClasInterface -> [ClassOrGeneric] -> DepM [ClassOrGeneric]
 depInherit c acc = foldM depTyp acc (allInheritedTypes c)
 
-depFeatures :: ClasInterface -> [ClasInterface] -> DepM [ClasInterface]
+depFeatures :: ClasInterface -> [ClassOrGeneric] -> DepM [ClassOrGeneric]
 depFeatures c acc = foldM depFeature acc (allFeatures c)
 
-depAttrs :: ClasInterface -> [ClasInterface] -> DepM [ClasInterface]
+depAttrs :: ClasInterface -> [ClassOrGeneric] -> DepM [ClassOrGeneric]
 depAttrs c = depDecls (map attrDecl $ allAttributes c)
 
-depFeature :: [ClasInterface] -> FeatureEx -> DepM [ClasInterface]
+depFeature :: [ClassOrGeneric] -> FeatureEx -> DepM [ClassOrGeneric]
 depFeature acc f = 
     let fSig     = Decl (featureName f) (featureResult f)
         allDecls = fSig : featureArgs f
     in depDecls allDecls acc
 
-depDecls :: [Decl] -> [ClasInterface] -> DepM [ClasInterface]
+depDecls :: [Decl] -> [ClassOrGeneric] -> DepM [ClassOrGeneric]
 depDecls ds acc = foldM depDecl acc ds
 
-hasClas :: ClassName -> [ClasInterface] -> Bool
+hasClas :: ClassName -> [ClassOrGeneric] -> Bool
 hasClas "DOUBLE"    = hasClas "REAL_64"
 hasClas "CHARACTER" = hasClas "CHARACTER_8"
 hasClas "STRING"    = hasClas "STRING_8"
-hasClas cn = any ( (==) cn . className)
+hasClas cn = 
+  let clasGenName (Class cn) = className cn
+      clasGenName (Gen gen) = className gen
+  in any ((==) cn . clasGenName)
 
-depDecl :: [ClasInterface] -> Decl -> DepM [ClasInterface]
+depDecl :: [ClassOrGeneric] -> Decl -> DepM [ClassOrGeneric]
 depDecl acc (Decl _ t) = depTyp acc t
 
-depTyp :: [ClasInterface] -> Typ -> DepM [ClasInterface]
+depTyp :: [ClassOrGeneric] -> Typ -> DepM [ClassOrGeneric]
 depTyp acc (ClassType cn gs)
     | not (hasClas cn acc) = foldM depTyp acc gs >>= depGen' cn
     | otherwise = return acc
