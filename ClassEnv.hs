@@ -9,13 +9,17 @@ import Language.Eiffel.TypeCheck.Class
 import Language.Eiffel.TypeCheck.TypedExpr as T
      
 newtype ClassEnv body expr = ClassEnv (Map String (AbsClas body expr))
+                           deriving Show
 
 type TInterEnv = ClassEnv EmptyBody T.TExpr
 type InterEnv = ClassEnv EmptyBody Expr
 
-
 makeEnv :: [AbsClas body expr] -> ClassEnv body expr
 makeEnv = ClassEnv . Map.fromList . map (\c -> (map toLower (className c), c))
+
+-- |All keys' class-names in the class environment
+envKeys :: ClassEnv body expr -> [String]
+envKeys (ClassEnv m) = Map.keys m
 
 
 -- |Lookup a class name in the environment. This name should be lower-case,
@@ -28,4 +32,4 @@ envLookup name e@(ClassEnv m) =
                   ]
   in case lookup name translate of
     Just alias -> Map.lookup alias m
-    Nothing -> Map.lookup name m
+    Nothing -> Map.lookup (map toLower name) m

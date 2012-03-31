@@ -1,9 +1,16 @@
 module Main where
 
-import Data.Either
+import Control.Applicative
+
+import Data.Binary
+import qualified Data.ByteString.Lazy as BS
 import Data.List
+
 import qualified Data.Map as Map
-import Data.Map (Map)
+import qualified Data.Set as Set
+import Data.Set (Set)
+
+
 import Data.Maybe
 
 import Language.Eiffel.Parser.Parser
@@ -13,6 +20,8 @@ import Language.Eiffel.Position
 import qualified Language.Eiffel.PrettyPrint as PP
 
 import Language.Eiffel.TypeCheck.Class
+import Language.Eiffel.TypeCheck.Expr (flatten)
+import Language.Eiffel.TypeCheck.Context
 import Language.Eiffel.TypeCheck.TypedExpr as T
 
 import qualified Language.DemonL.AST as D
@@ -26,31 +35,48 @@ import DepGen
 import Domain
 import GenerateSummaries
 
+
+getDomain file = do
+  classEi <- parseClassFile file
+  case classEi of
+    Left err -> error $ "getDomain: " ++  show err
+    Right cls -> do
+      classInts <- Map.elems `fmap` readAllSummaries
+      case depGen (makeEnv classInts) "work_queue" of
+        Left err -> error $ "getDomain: " ++ show err
+        Right domainInts -> 
+          case clasM classInts cls of 
+            Left err -> error $ "getDomain: " ++  err
+            Right tCls -> do
+              tis <- typeInterfaces domainInts
+              return (tis, tCls)
+
+
+getDomainFile file = do 
+  classEi <- parseClassFile file
+  case classEi of
+    Left err -> error $ "getDomain: " ++  show err
+    Right cls -> do
+      classInts <- Map.elems `fmap` readAllSummaries
+      domainInts <- readDomain
+      case clasM classInts cls of 
+        Left err -> error $ "getDomain: " ++  err
+        Right tCls -> return (domainInts, tCls)
+
+readDomain :: IO ([AbsClas EmptyBody T.TExpr])
+readDomain = decode <$> BS.readFile "typed_domain.tdom"
+
+writeDomain file = do
+  (Right tis, _) <- getDomain file
+  BS.writeFile "typed_domain.tdom" $ encode tis
+
 main :: IO ()
 main = do
   currDir <- getCurrentDirectory
-  let testDir = currDir </> "test"
-  --  print searchDirectories
-  -- files <- collectFileMap (testDir : searchDirectories)
-  -- print files
-  classEi <- parseClassFile (testDir </> "work_queue.e")
-  case classEi of
-    Left e -> print e
-    Right cls -> do
-      classInts <- Map.elems `fmap` readAllSummaries -- depGenInt files (className cls)
-      putStrLn "Generated dependencies"
-      -- let unliked = rights (map (unlikeInterfaceM classInts) classInts)
-      let domainInts = either (error . show) id $ depGen (makeEnv classInts) "work_queue"
-      print (map className domainInts)
-      case clasM classInts cls of
-        Left e -> print e
-        Right typedClass -> typeInterfaces domainInts >>= \ typedDomain ->
-          case typedDomain of
-            Left err -> print err
-            Right typedInts ->
-              print (PP.toDoc $ untype $ 
-                     instrument (makeEnv typedInts) "dequeue" typedClass)
-
+  let testFile = currDir </> "test" </> "work_queue.e"
+  (typedDomain, typedClass) <- getDomainFile testFile
+  print (PP.toDoc $ untype $ 
+         instrument (makeEnv typedDomain) "dequeue" typedClass)
 
 instrument :: TInterEnv -> String -> AbsClas (RoutineBody TExpr) TExpr 
               -> AbsClas (RoutineBody TExpr) TExpr
@@ -68,7 +94,7 @@ instrumentBody :: TInterEnv -> Contract TExpr
                   -> RoutineBody TExpr -> RoutineBody TExpr
 instrumentBody env ens (RoutineBody locals localProc body) =
   let 
-    ensD = map (teToD . clauseExpr) (contractClauses ens)
+    ensD = map (teToDCurr . clauseExpr) (contractClauses ens)
     body' = snd $ stmt env [] ensD  body
   in RoutineBody locals localProc body'
 instrumentBody _ _ r = r
@@ -94,7 +120,7 @@ block (cs, s) = (cs, Block s)
 
 replaceClause :: [D.Expr] -> TExpr -> TExpr -> [D.Expr]
 replaceClause clauses old new = 
-  map (replaceExpr (teToD old) (teToD new)) clauses
+  map (replaceExpr (teToDCurr old) (teToDCurr new)) clauses
   
 replaceExpr :: D.Expr -> D.Expr -> D.Expr -> D.Expr
 replaceExpr new old = go
@@ -111,7 +137,7 @@ dNeqNull :: Pos UnPosTExpr -> D.Expr
 dNeqNull e =       
   let ClassType cn _ = texprTyp (contents e)
       structType = D.StructType cn []
-  in D.BinOpExpr (D.RelOp D.Neq structType) (teToD e) D.LitNull
+  in D.BinOpExpr (D.RelOp D.Neq structType) (teToDCurr e) D.LitNull
 
 dConj :: [D.Expr] -> D.Expr
 dConj = foldr1 (D.BinOpExpr D.And)
@@ -123,15 +149,30 @@ texprClassName e =
 
 texprInterface :: TInterEnv -> TExpr -> AbsClas EmptyBody T.TExpr
 texprInterface env e = 
-  fromMaybe (error $ "texprInterface: " ++ show e) 
+  fromMaybe (error $ "texprInterface: " ++ show e ++ "," ++ show (envKeys env))
             (envLookup (texprClassName e) env)
+
+flatten' :: TInterEnv -> Typ -> AbsClas EmptyBody T.TExpr
+flatten' (ClassEnv e) typ = 
+  case idErrorRead (flatten typ) (mkCtx typ (Map.elems e)) of
+    Left e -> error $ "flatten': " ++ e
+    Right c -> classMapExprs updRoutine id id c
+    where
+      updRoutine r = r { routineReq = updContract (routineReq r)
+                       , routineEns = updContract (routineEns r)
+                       }
+      updContract = mapContract (\cl -> cl {clauseExpr = go' (clauseExpr cl)})
+      
+      go' e = attachPos (position e) (go $ contents e)
+      go (T.Call trg n args t) = T.Call (go' trg) n (map go' args) t
+      go (T.CurrentVar t) = T.CurrentVar typ
 
 texprPre :: TInterEnv -> TExpr -> String -> [T.TExpr]
 texprPre env targ name = 
-  let iface = texprInterface env targ
-  in case findFeature iface name of
-    Just rout -> map clauseExpr (contractClauses (routineReq rout))
-    Nothing -> error $ "texprPre: can't find routine"
+  let iface = flatten' env (texpr targ)
+  in case findFeatureEx iface name of
+    Just feat -> map clauseExpr (featurePre feat)
+    Nothing -> error $ "texprPre: can't find feature: " ++ show targ ++ "." ++ name
 
 preCond :: TInterEnv -> TExpr -> [D.Expr]
 preCond env ex = go (contents ex)
@@ -139,7 +180,7 @@ preCond env ex = go (contents ex)
     go' = go . contents
     go (T.Call trg name args _) = 
       let callPreTExpr = texprPre env trg name
-          callPres = map teToD callPreTExpr
+          callPres = map (teToD (teToDCurr trg)) callPreTExpr
       in dNeqNull trg : concatMap go' (trg : args) ++ callPres
     go (T.Access trg _ _) = dNeqNull trg : go' trg
     go (T.Old e) = go' e
@@ -225,3 +266,26 @@ stmt' env decls ens = go
         (fromCls, from') = stmt env decls bodyCls from
       in meldCall decls fromCls (Loop from' untl inv body' var)
     go e = error ("stmt'go: " ++ show e)
+
+
+data Indicator = Indicator Typ String deriving (Eq, Ord)
+data Action = Action Typ String deriving (Eq, Ord)
+
+
+domActions :: TInterEnv -> T.TExpr -> Set Action
+domActions env e = 
+  let pairs = typeCallPairs e
+      cls = texprInterface env e
+      post = undefined
+      -- Desired interface:
+      domActions' :: TInterEnv -> Set Indicator -> Set Action
+      domActions' = undefined
+  in error "domActions"
+
+typeCallPairs :: T.TExpr -> Set Indicator
+typeCallPairs = go'
+  where go' = go . contents
+        go (T.Call trg name args t) = 
+          let argPairs = Set.unions (map typeCallPairs (trg : args))
+          in Set.insert (Indicator (texpr trg) name) argPairs
+        go _ = Set.empty

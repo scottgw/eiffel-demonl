@@ -66,7 +66,7 @@ depFeatures c acc = foldM depFeature acc (allFeatures c)
 depAttrs :: ClasInterface -> [ClassOrGeneric] -> DepM [ClassOrGeneric]
 depAttrs c = depDecls (map attrDecl $ allAttributes c)
 
-depFeature :: [ClassOrGeneric] -> FeatureEx -> DepM [ClassOrGeneric]
+depFeature :: [ClassOrGeneric] -> FeatureEx Expr -> DepM [ClassOrGeneric]
 depFeature acc f = 
     let fSig     = Decl (featureName f) (featureResult f)
         allDecls = fSig : featureArgs f

@@ -43,7 +43,7 @@ thisDecl cls = D.Decl "this" (StructType (className cls) undefined)
 fromClause :: E.Clause TExpr -> D.Clause D.Expr
 fromClause (E.Clause tagMb expr) = 
     let tag = fromMaybe "no_tag" tagMb
-    in D.Clause tag (teToD expr)
+    in D.Clause tag (teToDCurr expr)
 
 fromRoutine :: AbsClas body TExpr -> AbsRoutine abs TExpr -> Either ProcedureU ProcedureU
 fromRoutine clas rtn = 
@@ -56,32 +56,41 @@ fromRoutine clas rtn =
          E.NoType -> Left prcd
          _ -> Right prcd
 
-teToD :: TExpr -> D.Expr
-teToD te = go (contents te)
+teToDCurr = teToD (D.Var "this")
+
+teToD :: D.Expr -> TExpr -> D.Expr
+teToD curr' te = go curr' (contents te)
   where
-    go (T.Call trg name args _) = D.Call name (teToD trg : map teToD args)
-    go (T.Access trg name _)    = D.Access (teToD trg) name
-    go (T.EqExpr op e1 e2) = D.BinOpExpr (dEqOp op) (teToD e1) (teToD e2)
-    go (T.Old e) = D.UnOpExpr D.Old (teToD e)
-    go (T.CurrentVar _)         = D.Var "this"
-    go (T.Attached _ e _)       =
+    go' curr = go curr . contents
+    
+    go :: D.Expr -> UnPosTExpr -> D.Expr
+    go curr (T.Call trg name args _) = 
+      let dtrg = go' curr trg
+          ClassType cn _ = texpr trg
+      in D.Call (cn ++ "_" ++ name) (dtrg : map (go' dtrg) args)
+    go curr (T.Access trg name _)    = D.Access (go' curr trg) name
+    go curr (T.EqExpr op e1 e2) = 
+      D.BinOpExpr (dEqOp op) (go' curr e1) (go' curr e2)
+    go curr (T.Old e) = D.UnOpExpr D.Old (go' curr e)
+    go curr (T.CurrentVar _)         = curr
+    go curr (T.Attached _ e _)       =
       let ClassType cn _ = texprTyp (contents e)
           structType = D.StructType cn []
-      in D.BinOpExpr (D.RelOp D.Neq structType) (teToD e) D.LitNull
-    go (T.Box _ e)     = teToD e
-    go (T.Unbox _ e)   = teToD e
-    go (T.Cast _ e)    = teToD e
-    go (T.Var n _)     = D.Var n
-    go (T.ResultVar _) = D.ResultVar
-    go (T.LitInt i)    = D.LitInt i
-    go (T.LitBool b)   = D.LitBool b
-    go (T.LitVoid _)   = D.LitNull
-    go (T.LitChar _)   = error "teToD: unimplemented LitChar"
-    go (T.LitString _) = error "teToD: unimplemented LitString"
-    go (T.LitDouble _) = error "teToD: unimplemented LitDouble"
-    go (T.Agent _ _ _ _) = error "teToD: unimplemented Agent"
-    go (T.Tuple _)     = error "teToD: unimplemented Tuple"
-    go (T.LitArray _)  = error "teToD: unimplemented LitArray"
+      in D.BinOpExpr (D.RelOp D.Neq structType) (go' curr e) D.LitNull
+    go curr (T.Box _ e)     = go' curr e
+    go curr (T.Unbox _ e)   = go' curr e
+    go curr (T.Cast _ e)    = go' curr e
+    go _curr (T.Var n _)     = D.Var n
+    go _curr (T.ResultVar _) = D.ResultVar
+    go _curr (T.LitInt i)    = D.LitInt i
+    go _curr (T.LitBool b)   = D.LitBool b
+    go _curr (T.LitVoid _)   = D.LitNull
+    go _curr (T.LitChar _)   = error "teToD: unimplemented LitChar"
+    go _curr (T.LitString _) = error "teToD: unimplemented LitString"
+    go _curr (T.LitDouble _) = error "teToD: unimplemented LitDouble"
+    go _curr (T.Agent _ _ _ _) = error "teToD: unimplemented Agent"
+    go _curr (T.Tuple _)     = error "teToD: unimplemented Tuple"
+    go _curr (T.LitArray _)  = error "teToD: unimplemented LitArray"
 
 dEqOp o = D.RelOp (rel o) D.NoType
   where
