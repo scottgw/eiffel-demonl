@@ -35,7 +35,6 @@ import DepGen
 import Domain
 import GenerateSummaries
 
-
 getDomain file = do
   classEi <- parseClassFile file
   case classEi of
@@ -76,7 +75,7 @@ main = do
   let testFile = currDir </> "test" </> "work_queue.e"
   (typedDomain, typedClass) <- getDomainFile testFile
   print (PP.toDoc $ untype $ 
-         instrument (makeEnv typedDomain) "dequeue" typedClass)
+         instrument (flattenEnv $ makeEnv typedDomain) "dequeue" typedClass)
 
 instrument :: TInterEnv -> String -> AbsClas (RoutineBody TExpr) TExpr 
               -> AbsClas (RoutineBody TExpr) TExpr
@@ -152,24 +151,11 @@ texprInterface env e =
   fromMaybe (error $ "texprInterface: " ++ show e ++ "," ++ show (envKeys env))
             (envLookup (texprClassName e) env)
 
-flatten' :: TInterEnv -> Typ -> AbsClas EmptyBody T.TExpr
-flatten' (ClassEnv e) typ = 
-  case idErrorRead (flatten typ) (mkCtx typ (Map.elems e)) of
-    Left e -> error $ "flatten': " ++ e
-    Right c -> classMapExprs updRoutine id id c
-    where
-      updRoutine r = r { routineReq = updContract (routineReq r)
-                       , routineEns = updContract (routineEns r)
-                       }
-      updContract = mapContract (\cl -> cl {clauseExpr = go' (clauseExpr cl)})
-      
-      go' e = attachPos (position e) (go $ contents e)
-      go (T.Call trg n args t) = T.Call (go' trg) n (map go' args) t
-      go (T.CurrentVar t) = T.CurrentVar typ
-
 texprPre :: TInterEnv -> TExpr -> String -> [T.TExpr]
 texprPre env targ name = 
-  let iface = flatten' env (texpr targ)
+  let 
+    ClassType typeName _ = texpr targ
+    Just iface = envLookup typeName env
   in case findFeatureEx iface name of
     Just feat -> map clauseExpr (featurePre feat)
     Nothing -> error $ "texprPre: can't find feature: " ++ show targ ++ "." ++ name
@@ -272,6 +258,26 @@ data Indicator = Indicator Typ String deriving (Eq, Ord)
 data Action = Action Typ String deriving (Eq, Ord)
 
 
+flattenEnv :: TInterEnv -> TInterEnv
+flattenEnv env@(ClassEnv m) = 
+  ClassEnv (Map.map (flatten' env . classToType) m)
+  where
+    flatten' :: TInterEnv -> Typ -> AbsClas EmptyBody T.TExpr
+    flatten' (ClassEnv e) typ = 
+      case idErrorRead (flatten typ) (mkCx1tx typ (Map.elems e)) of
+        Left e -> error $ "flatten': " ++ e
+        Right c -> classMapExprs updRoutine id id c
+      where
+        updRoutine r = r { routineReq = updContract (routineReq r)
+                         , routineEns = updContract (routineEns r)
+                         }
+        updContract = mapContract (\cl -> cl {clauseExpr = go' (clauseExpr cl)})
+      
+        go' e = attachPos (position e) (go $ contents e)
+        go (T.Call trg n args t) = T.Call (go' trg) n (map go' args) t
+        go (T.CurrentVar t) = T.CurrentVar typ
+  
+  
 domActions :: TInterEnv -> T.TExpr -> Set Action
 domActions env e = 
   let pairs = typeCallPairs e
