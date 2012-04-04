@@ -264,7 +264,7 @@ flattenEnv env@(ClassEnv m) =
   where
     flatten' :: TInterEnv -> Typ -> AbsClas EmptyBody T.TExpr
     flatten' (ClassEnv e) typ = 
-      case idErrorRead (flatten typ) (mkCx1tx typ (Map.elems e)) of
+      case idErrorRead (flatten typ) (mkCtx typ (Map.elems e)) of
         Left e -> error $ "flatten': " ++ e
         Right c -> classMapExprs updRoutine id id c
       where
@@ -284,8 +284,8 @@ domActions env e =
       cls = texprInterface env e
       post = undefined
       -- Desired interface:
-      domActions' :: TInterEnv -> Set Indicator -> Set Action
-      domActions' = undefined
+      domActions' :: Set Indicator -> Set Action
+      domActions' indicators = undefined
   in error "domActions"
 
 typeCallPairs :: T.TExpr -> Set Indicator
