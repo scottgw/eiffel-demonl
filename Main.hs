@@ -34,6 +34,11 @@ import DepGen
 import Domain
 import GenerateSummaries
 
+regen = do
+  genAllSummaries
+  pwd <- getCurrentDirectory
+  writeDomain $ pwd </> "test" </> "work_queue.e"
+
 getDomain file = do
   classEi <- parseClassFile file
   case classEi of
