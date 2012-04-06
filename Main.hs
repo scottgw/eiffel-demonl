@@ -280,18 +280,28 @@ flattenEnv env@(ClassEnv m) =
   
 domActions :: TInterEnv -> T.TExpr -> Set Action
 domActions env e = 
-  let pairs = typeCallPairs e
-      cls = texprInterface env e
-      post = undefined
+  let indicators = exprIndicators e
       -- Desired interface:
       domActions' :: Set Indicator -> Set Action
-      domActions' indicators = undefined
-  in error "domActions"
+      domActions' = Set.fold (Set.union . go) Set.empty
+        where
+          go :: Indicator -> Set Action
+          go ind@(Indicator typ name) = 
+            let Just clas = envLookup (classNameType typ) env
+                routines = allRoutines clas
+                hasIndicator = Set.member ind .  clausesIndicators . featurePre
+                modifyIndicators = filter hasIndicator routines
+            in Set.fromList (map (\r -> Action typ (featureName r)) 
+                                 modifyIndicators)
+  in domActions' indicators
 
-typeCallPairs :: T.TExpr -> Set Indicator
-typeCallPairs = go'
+clausesIndicators :: [Clause T.TExpr] -> Set Indicator
+clausesIndicators = Set.unions . map (exprIndicators . clauseExpr)
+
+exprIndicators :: T.TExpr -> Set Indicator
+exprIndicators = go'
   where go' = go . contents
         go (T.Call trg name args t) = 
-          let argPairs = Set.unions (map typeCallPairs (trg : args))
+          let argPairs = Set.unions (map exprIndicators (trg : args))
           in Set.insert (Indicator (texpr trg) name) argPairs
         go _ = Set.empty
