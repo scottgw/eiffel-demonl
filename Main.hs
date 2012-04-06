@@ -10,7 +10,6 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Set (Set)
 
-
 import Data.Maybe
 
 import Language.Eiffel.Parser.Parser
@@ -223,6 +222,19 @@ meldCall decls pre s =
     relyCall = p0 $ E.CallStmt $ rely args
   in (pre, Block [relyCall, p0 s])
 
+allPreConditions :: TInterEnv -> [Decl] -> UnPosTStmt -> [D.Expr]
+allPreConditions env decls = go
+  where 
+    pre  = preCond env
+    go' = go . contents
+    go :: UnPosTStmt -> [D.Expr]
+    go (Block blkBody) = concatMap go' blkBody
+    go (Assign trg src) = pre src
+    go (CallStmt e) = pre e
+    go (Loop from untl inv body var) =
+      go' from ++ concatMap (pre . clauseExpr) untl ++ go' body
+    go e = error ("stmt'go: " ++ show e)
+
 stmt' :: TInterEnv -> [Decl] -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
 stmt' env decls ens = go
   where 
@@ -254,6 +266,7 @@ stmt' env decls ens = go
     go e = error ("stmt'go: " ++ show e)
 
 
+
 data Indicator = Indicator Typ String deriving (Eq, Ord)
 data Action = Action Typ String deriving (Eq, Ord)
 
@@ -276,8 +289,7 @@ flattenEnv env@(ClassEnv m) =
         go' e = attachPos (position e) (go $ contents e)
         go (T.Call trg n args t) = T.Call (go' trg) n (map go' args) t
         go (T.CurrentVar t) = T.CurrentVar typ
-  
-  
+
 domActions :: TInterEnv -> T.TExpr -> Set Action
 domActions env e = 
   let indicators = exprIndicators e
