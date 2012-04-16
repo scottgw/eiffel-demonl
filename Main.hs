@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Main where
 
 import Control.Applicative
@@ -78,8 +80,14 @@ main = do
   currDir <- getCurrentDirectory
   let testFile = currDir </> "test" </> "work_queue.e"
   (typedDomain, typedClass) <- getDomainFile testFile
-  print (PP.toDoc $ untype $ 
-         instrument (flattenEnv $ makeEnv typedDomain) "dequeue" typedClass)
+  let flatEnv = flattenEnv $ makeEnv typedDomain
+  print (PP.toDoc $ untype $ instrument flatEnv "dequeue" typedClass)
+  let Just rout :: Maybe (AbsRoutine (RoutineBody TExpr) TExpr) = 
+                    findFeature typedClass "dequeue"
+      decls = featureArgs rout ++ routineDecls rout
+      pres = nub $ allPreConditions flatEnv decls $ 
+                     contents $ routineBody (routineImpl rout)
+  putStrLn $ unlines $ map show $ map (domActions flatEnv) pres
 
 instrument :: TInterEnv -> String -> AbsClas (RoutineBody TExpr) TExpr 
               -> AbsClas (RoutineBody TExpr) TExpr
@@ -142,6 +150,12 @@ dNeqNull e =
       structType = D.StructType cn []
   in D.BinOpExpr (D.RelOp D.Neq structType) (teToDCurr e) D.LitNull
 
+tNeqNull :: Pos UnPosTExpr -> T.TExpr
+tNeqNull e = 
+  let t = texpr e
+      p = attachPos (position e)
+  in p $ T.EqExpr T.Neq e (p $ T.LitVoid t)
+
 dConj :: [D.Expr] -> D.Expr
 dConj = foldr1 (D.BinOpExpr D.And)
 
@@ -163,6 +177,33 @@ texprPre env targ name =
   in case findFeatureEx iface name of
     Just feat -> map clauseExpr (featurePre feat)
     Nothing -> error $ "texprPre: can't find feature: " ++ show targ ++ "." ++ name
+    
+texprPre' :: TInterEnv -> TExpr -> [T.TExpr]
+texprPre' env = go'
+  where
+    go' = go . contents
+    go (T.Call trg name args _) = 
+      let callPreTExprs = texprPre env trg name
+      in tNeqNull trg : concatMap go' (trg : args) ++ callPreTExprs
+    go (T.Access trg _ _) = tNeqNull trg : go' trg
+    go (T.Old e) = go' e
+    go (T.CurrentVar _)      = []
+    go (T.Attached _ e _)    = go' e
+    go (T.Box _ e)     = go' e
+    go (T.Unbox _ e)   = go' e
+    go (T.Cast _ e)    = go' e
+    go (T.Var _ _)     = []
+    go (T.ResultVar _) = []
+    go (T.LitInt _)    = []
+    go (T.LitBool _)   = []
+    go (T.LitVoid _)   = []
+    go (T.LitChar _)   = error "preCond: unimplemented LitChar"
+    go (T.LitString _) = error "preCond: unimplemented LitString"
+    go (T.LitDouble _) = error "preCond: unimplemented LitDouble"
+    go (T.LitArray _)  = error "preCond: unimplemented LitArray"
+    go (T.Tuple _)     = error "preCond: unimplemented Tuple"
+    go (T.Agent _ _ _ _) = error "preCond: unimplemented Agent"
+
 
 preCond :: TInterEnv -> TExpr -> [D.Expr]
 preCond env ex = go (contents ex)
@@ -227,18 +268,18 @@ meldCall decls pre s =
     relyCall = p0 $ E.CallStmt $ rely args
   in (pre, Block [relyCall, p0 s])
 
-allPreConditions :: TInterEnv -> [Decl] -> UnPosTStmt -> [D.Expr]
+allPreConditions :: TInterEnv -> [Decl] -> UnPosTStmt -> [T.TExpr]
 allPreConditions env decls = go
   where 
-    pre  = preCond env
+    pre  = texprPre' env
     go' = go . contents
-    go :: UnPosTStmt -> [D.Expr]
+    go :: UnPosTStmt -> [T.TExpr]
     go (Block blkBody) = concatMap go' blkBody
     go (Assign trg src) = pre src
     go (CallStmt e) = pre e
     go (Loop from untl inv body var) =
       go' from ++ concatMap (pre . clauseExpr) untl ++ go' body
-    go e = error ("stmt'go: " ++ show e)
+    go e = error ("allPreConditions.go: " ++ show e)
 
 stmt' :: TInterEnv -> [Decl] -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
 stmt' env decls ens = go
@@ -272,8 +313,8 @@ stmt' env decls ens = go
 
 
 
-data Indicator = Indicator Typ String deriving (Eq, Ord)
-data Action = Action Typ String deriving (Eq, Ord)
+data Indicator = Indicator Typ String deriving (Eq, Ord, Show)
+data Action = Action Typ String deriving (Eq, Ord, Show)
 
 
 flattenEnv :: TInterEnv -> TInterEnv
@@ -293,11 +334,13 @@ flattenEnv env@(ClassEnv m) =
       
         go' e = attachPos (position e) (go $ contents e)
         go (T.Call trg n args t) = T.Call (go' trg) n (map go' args) t
+        go (T.EqExpr r e1 e2) = T.EqExpr r (go' e1) (go' e2)
         go (T.CurrentVar t) = T.CurrentVar typ
+        go e = e -- error $ "flattenEnv: " ++ show e
 
-domActions :: TInterEnv -> T.TExpr -> Set Action
+domActions :: TInterEnv -> T.TExpr -> (Set Indicator, Set Action)
 domActions env e = 
-  let indicators = exprIndicators e
+  let eIndicators = exprIndicators e
       -- Desired interface:
       domActions' :: Set Indicator -> Set Action
       domActions' = Set.fold (Set.union . go) Set.empty
@@ -306,11 +349,12 @@ domActions env e =
           go ind@(Indicator typ name) = 
             let Just clas = envLookup (classNameType typ) env
                 routines = allRoutines clas
-                hasIndicator = Set.member ind .  clausesIndicators . featurePre
+                indicators = clausesIndicators . featurePost
+                hasIndicator = Set.member ind . indicators
                 modifyIndicators = filter hasIndicator routines
             in Set.fromList (map (\r -> Action typ (featureName r)) 
                                  modifyIndicators)
-  in domActions' indicators
+  in (eIndicators, domActions' eIndicators)
 
 clausesIndicators :: [Clause T.TExpr] -> Set Indicator
 clausesIndicators = Set.unions . map (exprIndicators . clauseExpr)
