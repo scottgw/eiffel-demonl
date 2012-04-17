@@ -16,7 +16,7 @@ feature {NON_EMPTY}
 			done := d
 		end
 
-	queue: LINKED_QUEUE [G]
+	queue: S_QUEUE [G]
 	mutex: MUTEX
 
 feature {NONE}
@@ -26,7 +26,7 @@ feature {NONE}
 feature
 	make (non_empty: NON_EMPTY [G])
 		do
-			create queue.make
+			create queue
 			create mutex.make
 
 			done_or_not_empty := non_empty
@@ -50,7 +50,7 @@ feature
 		do
 			mutex.lock
 
-			queue.extend (req)
+			queue.enqueue (req)
 			done_or_not_empty.check_inv
 
 			mutex.unlock
@@ -74,7 +74,7 @@ feature
 --			end
 
 			Result := queue.item
-			queue.remove
+			queue.dequeue
 
 			mutex.unlock
 		ensure
