@@ -5,9 +5,10 @@ import qualified Data.Map as Map
 import Data.Map (Map)
 
 import Language.Eiffel.Syntax
+import Language.Eiffel.Util (classNameType)
 import Language.Eiffel.TypeCheck.Class
 import Language.Eiffel.TypeCheck.TypedExpr as T
-     
+  
 newtype ClassEnv body expr = ClassEnv (Map String (AbsClas body expr))
                            deriving Show
 
@@ -33,3 +34,6 @@ envLookup name e@(ClassEnv m) =
   in case lookup name translate of
     Just alias -> Map.lookup alias m
     Nothing -> Map.lookup (map toLower name) m
+
+envLookupType :: Typ -> ClassEnv body expr -> Maybe (AbsClas body expr)
+envLookupType t = envLookup (classNameType t)

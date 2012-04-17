@@ -31,14 +31,15 @@ fromAttr attr = fromDecl (attrDecl attr)
 
 fromType :: E.Typ -> D.Type
 fromType t | t == E.intType = D.IntType
-fromType (ClassType name _) = StructType name undefined
-fromType _ = error "fromType"
+fromType (ClassType name _) = StructType name []
+fromType E.NoType = D.NoType
+fromType t = error $ "fromType: " ++ show t
 
 fromDecl :: E.Decl -> D.Decl
 fromDecl (E.Decl n t) = D.Decl n (fromType t)
 
 thisDecl :: AbsClas body exp -> D.Decl
-thisDecl cls = D.Decl "this" (StructType (className cls) undefined)
+thisDecl cls = D.Decl "this" (StructType (className cls) [])
 
 fromClause :: E.Clause TExpr -> D.Clause D.Expr
 fromClause (E.Clause tagMb expr) = 
@@ -47,7 +48,7 @@ fromClause (E.Clause tagMb expr) =
 
 fromRoutine :: AbsClas body TExpr -> AbsRoutine abs TExpr -> Either ProcedureU ProcedureU
 fromRoutine clas rtn = 
-    let prcd = Procedure (featureName rtn)
+    let prcd = Procedure (className clas ++ "_" ++ featureName rtn)
                          (thisDecl clas : map fromDecl (routineArgs rtn))
                          (fromType $ featureResult rtn)
                          (map fromClause $ contractClauses $ routineReq rtn)
@@ -76,7 +77,7 @@ teToD curr' te = go curr' (contents te)
     go curr (T.Attached _ e _)       =
       let ClassType cn _ = texprTyp (contents e)
           structType = D.StructType cn []
-      in D.BinOpExpr (D.RelOp D.Neq structType) (go' curr e) D.LitNull
+      in D.BinOpExpr (D.RelOp D.Neq) (go' curr e) D.LitNull
     go curr (T.Box _ e)     = go' curr e
     go curr (T.Unbox _ e)   = go' curr e
     go curr (T.Cast _ e)    = go' curr e
@@ -92,7 +93,7 @@ teToD curr' te = go curr' (contents te)
     go _curr (T.Tuple _)     = error "teToD: unimplemented Tuple"
     go _curr (T.LitArray _)  = error "teToD: unimplemented LitArray"
 
-dEqOp o = D.RelOp (rel o) D.NoType
+dEqOp o = D.RelOp (rel o)
   where
     rel T.Eq = D.Eq
     rel T.Neq = D.Neq

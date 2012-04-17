@@ -9,6 +9,7 @@ import qualified Data.ByteString.Lazy as BS
 import Data.List
 
 import qualified Data.Map as Map
+import Data.Map (Map)
 import qualified Data.Set as Set
 import Data.Set (Set)
 
@@ -27,6 +28,7 @@ import Language.Eiffel.TypeCheck.TypedExpr as T
 
 import qualified Language.DemonL.AST as D
 import qualified Language.DemonL.Types as D
+import Language.DemonL.PrettyPrint
 
 import System.Directory
 import System.FilePath
@@ -82,12 +84,30 @@ main = do
   (typedDomain, typedClass) <- getDomainFile testFile
   let flatEnv = flattenEnv $ makeEnv typedDomain
   print (PP.toDoc $ untype $ instrument flatEnv "dequeue" typedClass)
+  domain typedClass flatEnv
+
+
+domain clas flatEnv = 
   let Just rout :: Maybe (AbsRoutine (RoutineBody TExpr) TExpr) = 
-                    findFeature typedClass "dequeue"
+                    findFeature clas "dequeue"
       decls = featureArgs rout ++ routineDecls rout
       pres = nub $ allPreConditions flatEnv decls $ 
                      contents $ routineBody (routineImpl rout)
-  putStrLn $ unlines $ map show $ map (domActions flatEnv) pres
+      typesAndNames = map (domActions flatEnv) pres
+      typeNameMap = collectNames (Set.unions typesAndNames)
+      domainClasses = Map.mapWithKey (cutDownClass flatEnv) typeNameMap
+  in  print (domainDoc untypeExprDoc $ makeDomain $ Map.elems domainClasses)
+
+
+cutDownClass flatEnv typ names =
+  let Just clas = envLookupType typ flatEnv
+      undefineNames = Set.fromList (map featureName (allFeatures clas :: [FeatureEx TExpr])) Set.\\ names
+  in Set.fold undefineName clas undefineNames
+  
+collectNames :: Set (Typ, String) -> Map Typ (Set String)
+collectNames = Set.fold go Map.empty
+  where go (t, name) = 
+          Map.insertWith (Set.union) t (Set.singleton name)
 
 instrument :: TInterEnv -> String -> AbsClas (RoutineBody TExpr) TExpr 
               -> AbsClas (RoutineBody TExpr) TExpr
@@ -148,7 +168,7 @@ dNeqNull :: Pos UnPosTExpr -> D.Expr
 dNeqNull e =       
   let ClassType cn _ = texprTyp (contents e)
       structType = D.StructType cn []
-  in D.BinOpExpr (D.RelOp D.Neq structType) (teToDCurr e) D.LitNull
+  in D.BinOpExpr (D.RelOp D.Neq) (teToDCurr e) D.LitNull
 
 tNeqNull :: Pos UnPosTExpr -> T.TExpr
 tNeqNull e = 
@@ -252,7 +272,7 @@ meldCall decls pre s =
     rely :: [T.TExpr] -> T.TExpr
     rely es = p0 $ T.Call curr "rely_call" es NoType
 
-    precondStr = show $ dConj $ nub pre
+    precondStr = show $ untypeExprDoc $ dConj $ nub pre
 
     agent = p0 . T.Agent
 
@@ -311,11 +331,15 @@ stmt' env decls ens = go
       in meldCall decls fromCls (Loop from' untl inv body' var)
     go e = error ("stmt'go: " ++ show e)
 
-
-
 data Indicator = Indicator Typ String deriving (Eq, Ord, Show)
-data Action = Action Typ String deriving (Eq, Ord, Show)
+indicatorTuple (Indicator t name) = (t, name)
 
+data Action = 
+  Action { actionType :: Typ 
+         , actionName :: String 
+         } deriving (Eq, Ord, Show)
+
+actionTuple (Action t name) = (t, name)
 
 flattenEnv :: TInterEnv -> TInterEnv
 flattenEnv env@(ClassEnv m) = 
@@ -338,7 +362,8 @@ flattenEnv env@(ClassEnv m) =
         go (T.CurrentVar t) = T.CurrentVar typ
         go e = e -- error $ "flattenEnv: " ++ show e
 
-domActions :: TInterEnv -> T.TExpr -> (Set Indicator, Set Action)
+
+domActions :: TInterEnv -> T.TExpr -> Set (Typ, String) -- (Set Indicator, Set Action)
 domActions env e = 
   let eIndicators = exprIndicators e
       -- Desired interface:
@@ -354,7 +379,8 @@ domActions env e =
                 modifyIndicators = filter hasIndicator routines
             in Set.fromList (map (\r -> Action typ (featureName r)) 
                                  modifyIndicators)
-  in (eIndicators, domActions' eIndicators)
+  in (Set.map indicatorTuple eIndicators) `Set.union` 
+     (Set.map actionTuple (domActions' eIndicators))
 
 clausesIndicators :: [Clause T.TExpr] -> Set Indicator
 clausesIndicators = Set.unions . map (exprIndicators . clauseExpr)
@@ -364,5 +390,8 @@ exprIndicators = go'
   where go' = go . contents
         go (T.Call trg name args t) = 
           let argPairs = Set.unions (map exprIndicators (trg : args))
-          in Set.insert (Indicator (texpr trg) name) argPairs
+          in if isBasic (texpr trg) 
+             then argPairs 
+             else Set.insert (Indicator (texpr trg) name) argPairs
+        go (T.EqExpr _ e1 e2) = go' e1 `Set.union` go' e2
         go _ = Set.empty
