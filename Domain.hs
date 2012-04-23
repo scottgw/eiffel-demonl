@@ -74,10 +74,8 @@ teToD curr' te = go curr' (contents te)
       D.BinOpExpr (dEqOp op) (go' curr e1) (go' curr e2)
     go curr (T.Old e) = D.UnOpExpr D.Old (go' curr e)
     go curr (T.CurrentVar _)         = curr
-    go curr (T.Attached _ e _)       =
-      let ClassType cn _ = texprTyp (contents e)
-          structType = D.StructType cn []
-      in D.BinOpExpr (D.RelOp D.Neq) (go' curr e) D.LitNull
+    go curr (T.Attached _ e _)       = 
+      D.BinOpExpr (D.RelOp D.Neq) (go' curr e) D.LitNull
     go curr (T.Box _ e)     = go' curr e
     go curr (T.Unbox _ e)   = go' curr e
     go curr (T.Cast _ e)    = go' curr e
@@ -99,6 +97,19 @@ dEqOp o = D.RelOp (rel o)
     rel T.Neq = D.Neq
     rel T.TildeEq = D.Eq
     rel T.TildeNeq = D.Neq
+
+
+replaceExpr :: D.Expr -> D.Expr -> D.Expr -> D.Expr
+replaceExpr new old = go
+  where 
+    rep = replaceExpr new old
+    go e | e == old           = new
+    go (D.Call name args)     = D.Call name (map rep args)
+    go (D.Access trg name)    = D.Access (rep trg) name
+    go (D.BinOpExpr op e1 e2) = D.BinOpExpr op (rep e1) (rep e2)
+    go (D.UnOpExpr op e)      = D.UnOpExpr op (rep e)
+    go e = e
+
 
 -- op1 :: E.UnOp -> D.UnOp
 -- op1 E.Not = D.Not

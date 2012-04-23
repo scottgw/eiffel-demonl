@@ -25,11 +25,11 @@ localDir = homeDir ++ ["local"]
 libraryDir :: [String]
 libraryDir = localDir ++ ["Eiffel70","library"]
 
-names :: [String]
-names = ["base2","base","thread","test"]
+libraryNames :: [String]
+libraryNames = ["base2","base","thread","test"]
 
 searchDirectories :: [(String, FilePath)]
-searchDirectories = zip names $
+searchDirectories = zip libraryNames $
   map joinPath 
     [ srcDir ++ ["eiffelbase2","trunk"]
     , libraryDir ++ ["base","elks"]
