@@ -1,5 +1,10 @@
 module Instrument (instrument) where
 
+import Control.Monad.Trans.Reader
+import Control.Monad.Trans.State
+import Control.Monad.Trans
+import Control.Monad.Identity
+
 import Data.List
 
 import Language.Eiffel.Syntax as E hiding (select)
@@ -15,44 +20,50 @@ import ClassEnv
 import Domain
 import Util
 
-stmt' :: Typ -> TInterEnv 
-         -> [Decl] -> [D.Expr] 
-         -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
-stmt' curr env decls ens = go
-  where 
-    meld = meldCall curr decls
+-- | Basic environment holding the typed interface environment,
+-- the current arguments, as well as the `Current` type.
+data Env = Env
+  { envInterfaces :: TInterEnv
+  , envCurrent :: Typ
+  , envArgs :: [Decl]
+  }
+
+-- | The reader monad that contains the environment.
+type EnvM a = StateT [D.Expr] (ReaderT Env Identity) a
+
+-- | The heart of the instrumentation of statements.
+-- Given a statement, a new statement and a list of assertions
+-- are returned.
+-- The assertions are the weakest precondition calculations,
+-- and the new statement has a call inserted before it that
+-- goes to the demonic interference tool.
+stmt' :: UnPosTStmt -> EnvM UnPosTStmt
+stmt' = 
+  let
+    go :: UnPosTStmt -> EnvM UnPosTStmt
+    go (Block blkBody) = do
+        blkBody' <- mapM stmtM (reverse blkBody)
+        meldCall (Block $ reverse blkBody')
     
-    go' = stmt curr env decls
+    go (Assign trg src) = do
+      modify (\ ens -> replaceClause ens trg src)
+      meldCall (Assign trg src)
     
-    go :: UnPosTStmt -> ([D.Expr], UnPosTStmt)
-    go (Block blkBody) = 
-      let (cs, blkBody') = wpList ens blkBody -- mapAccumR (stmt env) ens ss
-          wpList p [] = (p, [])
-          wpList p (s:ss) = 
-            let (p', ss') = wpList p ss
-                (p'', s') = go' p' s
-            in (p'', s':ss')
-      in meld cs (Block blkBody')
-    
-    go (Assign trg src) =
-      let newEns = replaceClause ens trg src
-      in meld newEns (Assign trg src)
-    
-    go (CallStmt e) =
+    go (CallStmt e) = do
+      env <- lift $ asks envInterfaces
       let pre = preCond env e
-          posts :: [T.TExpr]
           posts = texprAssert' featurePost env e -- ignores call chain
           nonOlds = concatMap nonOldExprs posts
-          ens' = pre ++ ens -- TODO: perform weakest precondition calculation
-      in meld ens' (CallStmt e)
-         
+      modify (pre ++) -- TODO: perform weakest precondition calculation
+      meldCall (CallStmt e)
+        
     -- TODO: Deal with until, invariant, and variant as well
-    go (Loop from untl inv body var) =
-      let 
-        (bodyCls, body') = go' ens body
-        (fromCls, from') = go' bodyCls from
-      in meld fromCls (Loop from' untl inv body' var)
+    go (Loop from untl inv body var) = do 
+        body' <- stmtM body
+        from' <- stmtM from
+        meldCall (Loop from' untl inv body' var)
     go e = error ("stmt'go: " ++ show e)
+  in go
 
 instrument :: TInterEnv 
               -> String 
@@ -80,14 +91,18 @@ instrumentBody :: Typ
 instrumentBody currType env ens decls (RoutineBody locals localProc body) =
   let 
     ensD = map (teToDCurr . clauseExpr) (contractClauses ens)
-    body' = snd $ stmt currType env decls ensD  body
+    body' = fst $ stmt currType env decls ensD  body
   in RoutineBody locals localProc body'
 instrumentBody _ _ _ _ r = r
 
-stmt :: Typ -> TInterEnv -> [Decl] -> [D.Expr] -> TStmt -> ([D.Expr], TStmt)
+stmt :: Typ -> TInterEnv -> [Decl] -> [D.Expr] -> TStmt -> (TStmt, [D.Expr])
 stmt currType env decls ens s = 
-  let (cs, s') = stmt' currType env decls ens (contents s)
-  in (cs, attachEmptyPos s')
+  runIdentity $ runReaderT (runStateT (stmtM s) ens) (Env env currType decls)
+
+stmtM :: TStmt -> EnvM TStmt
+stmtM s = do
+  s' <- stmt' (contents s)
+  return (attachEmptyPos s')
 
 nonOldExprs :: T.TExpr -> [T.UnPosTExpr]
 nonOldExprs = nub . go'
@@ -132,10 +147,12 @@ preCond env = go . contents
     go (T.LitDouble _) = error "preCond: unimplemented LitDouble"
     go (T.LitArray _)  = error "preCond: unimplemented LitArray"
     go (T.Tuple _)     = error "preCond: unimplemented Tuple"
-    go (T.Agent _ _ _ _) = error "preCond: unimplemented Agent"
+    go (T.Agent {}) = error "preCond: unimplemented Agent"
 
-meldCall :: Typ -> [Decl] -> [D.Expr] -> UnPosTStmt -> ([D.Expr], UnPosTStmt)
-meldCall currType decls pre s = 
+meldCall :: UnPosTStmt -> EnvM UnPosTStmt
+meldCall s = do
+  pre <- get
+  Env _ currType decls <- lift $ ask
   let 
     tuple x y = p0 $ T.Tuple [x, y]
     curr = p0 $ T.CurrentVar currType
@@ -166,7 +183,7 @@ meldCall currType decls pre s =
 
     relyCall :: TStmt
     relyCall = p0 $ E.CallStmt $ rely args
-  in (pre, Block [relyCall, p0 s])
+  return (Block [relyCall, p0 s])
 
 
 p0 :: a -> Pos a
