@@ -63,17 +63,25 @@ exprIndicators = go'
         go (T.EqExpr _ e1 e2) = go' e1 `Set.union` go' e2
         go _ = Set.empty
 
+domain :: AbsClas (RoutineBody TExpr) TExpr -> TInterEnv -> IO ()
 domain clas flatEnv =
   let Just rout :: Maybe (AbsRoutine (RoutineBody TExpr) TExpr) = 
                     findFeature clas "dequeue"
-      pres = nub $ allPreConditions flatEnv $ 
-                     contents $ routineBody (routineImpl rout)
+
+      pres :: [TExpr]
+      pres = nub $ runInterfaceReader (allPreConditions $ contents $ routineBody (routineImpl rout)) flatEnv
+
+      typesAndNames :: [Set (Typ, String)]
       typesAndNames = map (domActions flatEnv) pres
+
+      typeNameMap :: Map Typ (Set String)
       typeNameMap = collectNames (Set.unions typesAndNames)
+
       domainClasses = Map.mapWithKey (cutDownClass flatEnv) typeNameMap
   in  print (domainDoc untypeExprDoc $ makeDomain $ Map.elems domainClasses)
 
 
+cutDownClass :: TInterEnv -> Typ -> Set String -> AbsClas EmptyBody TExpr
 cutDownClass flatEnv typ names =
   let Just clas = envLookupType typ flatEnv
       undefineNames = Set.fromList (map featureName (allFeatures clas :: [FeatureEx TExpr])) Set.\\ names

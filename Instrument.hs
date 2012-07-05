@@ -20,16 +20,9 @@ import ClassEnv
 import Domain
 import Util
 
--- | Basic environment holding the typed interface environment,
--- the current arguments, as well as the `Current` type.
-data Env = Env
-  { envInterfaces :: TInterEnv
-  , envCurrent :: Typ
-  , envArgs :: [Decl]
-  }
-
--- | The reader monad that contains the environment.
-type EnvM a = StateT [D.Expr] (ReaderT Env Identity) a
+-- | The state monad built on the reader, with the list of assertions
+-- for the weakest precondition.
+type EnvM = StateT [D.Expr] EnvReaderM
 
 -- | The heart of the instrumentation of statements.
 -- Given a statement, a new statement and a list of assertions
@@ -50,10 +43,9 @@ stmt' =
       meldCall (Assign trg src)
     
     go (CallStmt e) = do
-      env <- lift $ asks envInterfaces
-      let pre = preCond env e
-          posts = texprAssert' featurePost env e -- ignores call chain
-          nonOlds = concatMap nonOldExprs posts
+      pre <- lift (liftToEnv $ preCond e)
+      posts <- lift (liftToEnv $ texprAssert' featurePost e) -- ignores call chain
+      let nonOlds = concatMap nonOldExprs posts
       modify (pre ++) -- TODO: perform weakest precondition calculation
       meldCall (CallStmt e)
         
@@ -65,40 +57,8 @@ stmt' =
     go e = error ("stmt'go: " ++ show e)
   in go
 
-instrument :: TInterEnv 
-              -> String 
-              -> AbsClas (RoutineBody TExpr) TExpr 
-              -> AbsClas (RoutineBody TExpr) TExpr
-instrument env routName clas = 
-  classMapRoutines (\r -> if featureName r == routName
-                          then instrumentRoutine env (classToType clas) r
-                          else r) clas
 
-instrumentRoutine :: TInterEnv
-                     -> Typ
-                     -> AbsRoutine (RoutineBody TExpr) TExpr 
-                     -> AbsRoutine (RoutineBody TExpr) TExpr
-instrumentRoutine env typ r = 
-  let decls = routineDecls r
-  in r {routineImpl = instrumentBody typ env (routineEns r) decls (routineImpl r)}
-
-instrumentBody :: Typ
-                  -> TInterEnv 
-                  -> Contract TExpr
-                  -> [Decl]
-                  -> RoutineBody TExpr 
-                  -> RoutineBody TExpr
-instrumentBody currType env ens decls (RoutineBody locals localProc body) =
-  let 
-    ensD = map (teToDCurr . clauseExpr) (contractClauses ens)
-    body' = fst $ stmt currType env decls ensD  body
-  in RoutineBody locals localProc body'
-instrumentBody _ _ _ _ r = r
-
-stmt :: Typ -> TInterEnv -> [Decl] -> [D.Expr] -> TStmt -> (TStmt, [D.Expr])
-stmt currType env decls ens s = 
-  runIdentity $ runReaderT (runStateT (stmtM s) ens) (Env env currType decls)
-
+-- | Prefix a statement with a call to demonL with the weakest precondition.
 stmtM :: TStmt -> EnvM TStmt
 stmtM s = do
   s' <- stmt' (contents s)
@@ -122,26 +82,27 @@ dConj :: [D.Expr] -> D.Expr
 dConj = foldr1 (D.BinOpExpr D.And)
 
 
-preCond :: TInterEnv -> TExpr -> [D.Expr]
-preCond env = go . contents
+preCond :: TExpr -> InterfaceReaderM [D.Expr]
+preCond = go . contents
   where
     go' = go . contents
-    go (T.Call trg name args _) = 
-      let callPreTExpr = texprAssert featurePre env trg name
-          callPres = map (teToD (teToDCurr trg)) callPreTExpr
-      in dNeqNull trg : concatMap go' (trg : args) ++ callPres
-    go (T.Access trg _ _) = dNeqNull trg : go' trg
+    go (T.Call trg name args _) = do
+      callPreTExpr <- texprAssert featurePre trg name
+      let callPres = map (teToD (teToDCurr trg)) callPreTExpr
+      rest <- concatMapM go' (trg : args)
+      return (dNeqNull trg : rest ++ callPres)
+    go (T.Access trg _ _) = (dNeqNull trg :) `fmap` go' trg
     go (T.Old e) = go' e
-    go (T.CurrentVar _)      = []
+    go (T.CurrentVar _)      = return []
     go (T.Attached _ e _)    = go' e
     go (T.Box _ e)     = go' e
     go (T.Unbox _ e)   = go' e
     go (T.Cast _ e)    = go' e
-    go (T.Var _ _)     = []
-    go (T.ResultVar _) = []
-    go (T.LitInt _)    = []
-    go (T.LitBool _)   = []
-    go (T.LitVoid _)   = []
+    go (T.Var _ _)     = return []
+    go (T.ResultVar _) = return []
+    go (T.LitInt _)    = return []
+    go (T.LitBool _)   = return []
+    go (T.LitVoid _)   = return []
     go (T.LitChar _)   = error "preCond: unimplemented LitChar"
     go (T.LitString _) = error "preCond: unimplemented LitString"
     go (T.LitDouble _) = error "preCond: unimplemented LitDouble"
@@ -193,3 +154,41 @@ p0 = attachEmptyPos
 replaceClause :: [D.Expr] -> TExpr -> TExpr -> [D.Expr]
 replaceClause clauses old new = 
   map (replaceExpr (teToDCurr old) (teToDCurr new)) clauses  
+
+-- Top level functions
+instrument :: TInterEnv 
+              -> String 
+              -> AbsClas (RoutineBody TExpr) TExpr 
+              -> AbsClas (RoutineBody TExpr) TExpr
+instrument env routName clas = 
+  classMapRoutines (\r -> if featureName r == routName
+                          then instrumentRoutine env (classToType clas) r
+                          else r) clas
+
+instrumentRoutine :: TInterEnv
+                     -> Typ
+                     -> AbsRoutine (RoutineBody TExpr) TExpr 
+                     -> AbsRoutine (RoutineBody TExpr) TExpr
+instrumentRoutine env typ r = 
+  let decls = routineDecls r
+  in r {routineImpl = instrumentBody typ env (routineEns r) decls (routineImpl r)}
+
+instrumentBody :: Typ
+                  -> TInterEnv 
+                  -> Contract TExpr
+                  -> [Decl]
+                  -> RoutineBody TExpr 
+                  -> RoutineBody TExpr
+instrumentBody currType env ens decls (RoutineBody locals localProc body) =
+  let 
+    ensD = map (teToDCurr . clauseExpr) (contractClauses ens)
+    body' = fst $ stmt currType env decls ensD  body
+  in RoutineBody locals localProc body'
+instrumentBody _ _ _ _ r = r
+
+stmt :: Typ -> TInterEnv -> [Decl] -> [D.Expr] -> TStmt -> (TStmt, [D.Expr])
+stmt currType env decls ens s = 
+  runEnvReader (runStateT (stmtM s) ens) (Env env currType decls)
+
+
+
