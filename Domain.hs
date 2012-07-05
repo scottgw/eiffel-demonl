@@ -98,7 +98,6 @@ dEqOp o = D.RelOp (rel o)
     rel T.TildeEq = D.Eq
     rel T.TildeNeq = D.Neq
 
-
 replaceExpr :: D.Expr -> D.Expr -> D.Expr -> D.Expr
 replaceExpr new old = go
   where 
@@ -107,6 +106,19 @@ replaceExpr new old = go
     go (D.Call name args)     = D.Call name (map rep args)
     go (D.Access trg name)    = D.Access (rep trg) name
     go (D.BinOpExpr op e1 e2) = D.BinOpExpr op (rep e1) (rep e2)
+    go (D.UnOpExpr op e)      = D.UnOpExpr op (rep e)
+    go e = e
+
+
+replaceExprNoOld :: D.Expr -> D.Expr -> D.Expr -> D.Expr
+replaceExprNoOld new old = go
+  where 
+    rep = replaceExpr new old
+    go e | e == old           = new
+    go (D.Call name args)     = D.Call name (map rep args)
+    go (D.Access trg name)    = D.Access (rep trg) name
+    go (D.BinOpExpr op e1 e2) = D.BinOpExpr op (rep e1) (rep e2)
+    go e@(D.UnOpExpr D.Old _) = e
     go (D.UnOpExpr op e)      = D.UnOpExpr op (rep e)
     go e = e
 

@@ -3,7 +3,6 @@ module Instrument (instrument) where
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
 import Control.Monad.Trans
-import Control.Monad.Identity
 
 import Data.List
 
@@ -43,10 +42,11 @@ stmt' =
       meldCall (Assign trg src)
     
     go (CallStmt e) = do
+      let Call trg _ _ _ = contents e
       pre <- lift (liftToEnv $ preCond e)
       posts <- lift (liftToEnv $ texprAssert' featurePost e) -- ignores call chain
-      let nonOlds = concatMap nonOldExprs posts
-      modify (pre ++) -- TODO: perform weakest precondition calculation
+      newPre <- weakestPreCall (dConj $ map (teToD (teToDCurr trg)) posts) 
+      put (pre ++ [newPre]) -- TODO: perform weakest precondition calculation
       meldCall (CallStmt e)
         
     -- TODO: Deal with until, invariant, and variant as well
@@ -57,6 +57,29 @@ stmt' =
     go e = error ("stmt'go: " ++ show e)
   in go
 
+-- | Create weakest precondition expression from a function's postcondition.
+-- The input postcondition should be preconverted to the DemonL expression
+-- type, including using the correct 'Current' type, probably taken from
+-- the originating target of the postcondition's call.
+weakestPreCall :: D.Expr -> EnvM D.Expr
+weakestPreCall post = do
+  qs <- get
+  let 
+    nonOlds :: [D.Expr]
+    nonOlds = nonOldExprs post
+      
+    existName :: Integer -> String
+    existName i = "ex____" ++ show i
+    
+    replaceUpdated :: D.Expr -> Integer -> D.Expr -> (Integer, D.Expr)
+    replaceUpdated nonOldPart i inExpr = 
+      let newExpr = replaceExprNoOld (D.Var $ existName i) nonOldPart inExpr
+      in (i + 1, newExpr) 
+    
+    useQuantVar i exprs nonOldPart = mapAccumL (replaceUpdated nonOldPart) i exprs
+    
+    (post': qs') = snd $ foldl (uncurry useQuantVar) (0, post:qs) nonOlds
+  return (D.BinOpExpr D.Implies post' (dConj qs'))
 
 -- | Prefix a statement with a call to demonL with the weakest precondition.
 stmtM :: TStmt -> EnvM TStmt
@@ -64,24 +87,27 @@ stmtM s = do
   s' <- stmt' (contents s)
   return (attachEmptyPos s')
 
-nonOldExprs :: T.TExpr -> [T.UnPosTExpr]
-nonOldExprs = nub . go'
+-- | Gather the subexpressions of a given expression that are non-old.
+-- 
+-- This may be used to approximate the things that may have changed
+-- as specificed by a postcondition.
+nonOldExprs :: D.Expr -> [D.Expr]
+nonOldExprs = nub . go
   where
-    go' :: T.TExpr -> [T.UnPosTExpr]
-    go' = go . contents
-    
-    go e@(T.Call _trg _name args _) = e : concatMap go' args
-    go e@(Var _ _) = [e]
+    go e@(D.Call _name args) = e : concatMap go args
+    go e@(D.Var _) = [e]
     go _ = []
 
-
+-- | DemonL expression asserting that the given expression isn't null.
 dNeqNull :: Pos UnPosTExpr -> D.Expr
 dNeqNull e = D.BinOpExpr (D.RelOp D.Neq) (teToDCurr e) D.LitNull
 
+-- | Conjunction of a list of DemonL assertions.
 dConj :: [D.Expr] -> D.Expr
 dConj = foldr1 (D.BinOpExpr D.And)
 
-
+-- | Take an expression and accumulate all preconditions
+-- and return them as DemonL expressions.
 preCond :: TExpr -> InterfaceReaderM [D.Expr]
 preCond = go . contents
   where
@@ -110,6 +136,9 @@ preCond = go . contents
     go (T.Tuple _)     = error "preCond: unimplemented Tuple"
     go (T.Agent {}) = error "preCond: unimplemented Agent"
 
+-- | Take a statement and make a new block with the accumulated
+-- precondition (stored int the EnvM state) as a rely-call
+-- first, then the argument statement.
 meldCall :: UnPosTStmt -> EnvM UnPosTStmt
 meldCall s = do
   pre <- get
@@ -150,29 +179,18 @@ meldCall s = do
 p0 :: a -> Pos a
 p0 = attachEmptyPos
 
-
+-- | Replace one expression with another in a list of DemonL
+-- expressions.
 replaceClause :: [D.Expr] -> TExpr -> TExpr -> [D.Expr]
 replaceClause clauses old new = 
   map (replaceExpr (teToDCurr old) (teToDCurr new)) clauses  
 
--- Top level functions
-instrument :: TInterEnv 
-              -> String 
-              -> AbsClas (RoutineBody TExpr) TExpr 
-              -> AbsClas (RoutineBody TExpr) TExpr
-instrument env routName clas = 
-  classMapRoutines (\r -> if featureName r == routName
-                          then instrumentRoutine env (classToType clas) r
-                          else r) clas
+-- | Instrument a particular statement.
+stmt :: Typ -> TInterEnv -> [Decl] -> [D.Expr] -> TStmt -> (TStmt, [D.Expr])
+stmt currType env decls ens s = 
+  runEnvReader (runStateT (stmtM s) ens) (Env env currType decls)
 
-instrumentRoutine :: TInterEnv
-                     -> Typ
-                     -> AbsRoutine (RoutineBody TExpr) TExpr 
-                     -> AbsRoutine (RoutineBody TExpr) TExpr
-instrumentRoutine env typ r = 
-  let decls = routineDecls r
-  in r {routineImpl = instrumentBody typ env (routineEns r) decls (routineImpl r)}
-
+-- | Instrument a routine body.
 instrumentBody :: Typ
                   -> TInterEnv 
                   -> Contract TExpr
@@ -186,9 +204,23 @@ instrumentBody currType env ens decls (RoutineBody locals localProc body) =
   in RoutineBody locals localProc body'
 instrumentBody _ _ _ _ r = r
 
-stmt :: Typ -> TInterEnv -> [Decl] -> [D.Expr] -> TStmt -> (TStmt, [D.Expr])
-stmt currType env decls ens s = 
-  runEnvReader (runStateT (stmtM s) ens) (Env env currType decls)
+-- | Instrument a routine.
+instrumentRoutine :: TInterEnv
+                     -> Typ
+                     -> AbsRoutine (RoutineBody TExpr) TExpr 
+                     -> AbsRoutine (RoutineBody TExpr) TExpr
+instrumentRoutine env typ r = 
+  let decls = routineDecls r
+  in r {routineImpl = instrumentBody typ env (routineEns r) decls (routineImpl r)}
 
 
+-- | Instrument a class, but only the given routine name.
+instrument :: TInterEnv 
+              -> String 
+              -> AbsClas (RoutineBody TExpr) TExpr 
+              -> AbsClas (RoutineBody TExpr) TExpr
+instrument env routName clas = 
+  classMapRoutines (\r -> if featureName r == routName
+                          then instrumentRoutine env (classToType clas) r
+                          else r) clas
 
