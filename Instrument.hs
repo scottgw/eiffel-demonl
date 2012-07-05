@@ -1,5 +1,6 @@
 module Instrument (instrument) where
 
+import Control.Monad
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
 import Control.Monad.Trans
@@ -45,15 +46,16 @@ stmt' =
       let Call trg _ _ _ = contents e
       pre <- lift (liftToEnv $ preCond e)
       posts <- lift (liftToEnv $ texprAssert' featurePost e) -- ignores call chain
-      newPre <- weakestPreCall (dConj $ map (teToD (teToDCurr trg)) posts) 
+      newPre <- weakestPreCall (dConj $ nub $ map teToDCurr posts) 
       put (pre ++ [newPre]) -- TODO: perform weakest precondition calculation
       meldCall (CallStmt e)
         
     -- TODO: Deal with until, invariant, and variant as well
-    go (Loop from untl inv body var) = do 
+    go (Loop from inv untl body var) = do 
         body' <- stmtM body
         from' <- stmtM from
-        meldCall (Loop from' untl inv body' var)
+        when (null inv) $ put []
+        meldCall (Loop from' inv untl body' var)
     go e = error ("stmt'go: " ++ show e)
   in go
 
