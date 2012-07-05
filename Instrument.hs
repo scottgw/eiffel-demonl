@@ -104,7 +104,8 @@ dNeqNull e = D.BinOpExpr (D.RelOp D.Neq) (teToDCurr e) D.LitNull
 
 -- | Conjunction of a list of DemonL assertions.
 dConj :: [D.Expr] -> D.Expr
-dConj = foldr1 (D.BinOpExpr D.And)
+dConj [] = D.LitBool True
+dConj es = foldr1 (D.BinOpExpr D.And) es
 
 -- | Take an expression and accumulate all preconditions
 -- and return them as DemonL expressions.
