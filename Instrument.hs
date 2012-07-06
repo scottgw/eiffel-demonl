@@ -1,11 +1,14 @@
 module Instrument (instrument) where
 
+import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
 import Control.Monad.Trans
 
 import Data.List
+import qualified Data.Set as Set
+import Data.Set (Set)
 
 import Language.Eiffel.Syntax as E hiding (select)
 import Language.Eiffel.Util
@@ -35,8 +38,8 @@ stmt' =
   let
     go :: UnPosTStmt -> EnvM UnPosTStmt
     go (Block blkBody) = do
-        blkBody' <- mapM stmtM (reverse blkBody)
-        meldCall (Block $ reverse blkBody')
+      blkBody' <- mapM stmtM (reverse blkBody)
+      meldCall (Block $ reverse blkBody')
     
     go (Assign trg src) = do
       modify (\ ens -> replaceClause ens trg src)
@@ -46,16 +49,16 @@ stmt' =
       let Call trg _ _ _ = contents e
       pre <- lift (liftToEnv $ preCond e)
       posts <- lift (liftToEnv $ texprAssert' featurePost e) -- ignores call chain
-      newPre <- weakestPreCall (dConj $ nub $ map teToDCurr posts) 
+      newPre <- weakestPreCallM (dConj $ nub $ map teToDCurr posts) 
       put (pre ++ [newPre]) -- TODO: perform weakest precondition calculation
       meldCall (CallStmt e)
         
     -- TODO: Deal with until, invariant, and variant as well
     go (Loop from inv untl body var) = do 
-        body' <- stmtM body
-        from' <- stmtM from
-        when (null inv) $ put []
-        meldCall (Loop from' inv untl body' var)
+      body' <- stmtM body
+      from' <- stmtM from
+      when (null inv) $ put []
+      meldCall (Loop from' inv untl body' var)
     go e = error ("stmt'go: " ++ show e)
   in go
 
@@ -63,12 +66,14 @@ stmt' =
 -- The input postcondition should be preconverted to the DemonL expression
 -- type, including using the correct 'Current' type, probably taken from
 -- the originating target of the postcondition's call.
-weakestPreCall :: D.Expr -> EnvM D.Expr
-weakestPreCall post = do
-  qs <- get
+weakestPreCallM :: D.Expr -> EnvM D.Expr
+weakestPreCallM post = weakestPreCall post <$> get
+
+weakestPreCall :: D.Expr -> [D.Expr] -> D.Expr
+weakestPreCall post qs = 
   let 
     nonOlds :: [D.Expr]
-    nonOlds = nonOldExprs post
+    nonOlds = reverse $ nonOldExprs post
       
     existName :: Integer -> String
     existName i = "ex____" ++ show i
@@ -80,8 +85,10 @@ weakestPreCall post = do
     
     useQuantVar i exprs nonOldPart = mapAccumL (replaceUpdated nonOldPart) i exprs
     
-    (post': qs') = snd $ foldl (uncurry useQuantVar) (0, post:qs) nonOlds
-  return (D.BinOpExpr D.Implies post' (dConj qs'))
+    (post': qs') = snd $ Set.foldl (uncurry useQuantVar) (0, post:qs) nonOlds
+  in D.BinOpExpr D.Implies post' (dConj qs')
+
+
 
 -- | Prefix a statement with a call to demonL with the weakest precondition.
 stmtM :: TStmt -> EnvM TStmt
@@ -93,12 +100,30 @@ stmtM s = do
 -- 
 -- This may be used to approximate the things that may have changed
 -- as specificed by a postcondition.
-nonOldExprs :: D.Expr -> [D.Expr]
-nonOldExprs = nub . go
+nonOldExprs :: D.Expr -> Set D.Expr
+nonOldExprs e =
+  let subs = properSubExprs e
+      noOlds = undefined 
+      noVars = Set.filter (not . isVar) subs
+  in noVars
+
+isVar :: D.Expr -> Bool
+isVar (D.Var _) = True
+isVar _ = False
+
+-- | Proper subexpressions of a given expression.
+-- This will surely break for cyclical ASTs.
+properSubExprs :: D.Expr -> Set D.Expr
+properSubExprs e = Set.delete e (subExprs e)
+
+-- | All subexpressions of a given expression
+subExprs :: D.Expr -> Set D.Expr
+subExprs = go
   where
-    go e@(D.Call _name args) = e : concatMap go args
-    go e@(D.Var _) = [e]
-    go _ = []
+    go e@(D.Call _ args) = Set.insert e (Set.unions (map go args))
+    go e@(D.BinOpExpr _ e1 e2) = Set.insert e (Set.union (go e1) (go e2))
+    go e@(D.UnOpExpr _ subE) = Set.insert e (go subE)
+    go e = Set.singleton e
 
 -- | DemonL expression asserting that the given expression isn't null.
 dNeqNull :: Pos UnPosTExpr -> D.Expr
