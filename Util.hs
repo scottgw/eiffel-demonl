@@ -3,8 +3,9 @@ module Util (allPreConditions, texprAssert', texprAssert,
              InterfaceReaderM, runInterfaceReader, liftToEnv,
              concatMapM) where
 
+import Control.Applicative
+
 import Control.Monad.Trans.Reader
-import Control.Monad.Trans
 import Control.Monad.Identity
 
 import Language.Eiffel.Syntax as E hiding (select)
@@ -37,7 +38,7 @@ runInterfaceReader :: InterfaceReaderM a -> TInterEnv -> a
 runInterfaceReader m r = runIdentity (runReaderT m r)
 
 -- | Lift the interface monad to the environment monad.
-liftToEnv m = runInterfaceReader m `fmap` asks envInterfaces
+liftToEnv m = runInterfaceReader m <$> asks envInterfaces
 
 allPreConditions :: UnPosTStmt -> InterfaceReaderM [T.TExpr]
 allPreConditions = go
@@ -51,6 +52,12 @@ allPreConditions = go
     go (Block blkBody) = concatMapM go' blkBody
     go (Assign _trg src) = pre src
     go (CallStmt e) = pre e
+    go (If cond then_ elses elseMb) = do
+      let elsePart (ElseIfPart c s) = (++) <$> pre c <*> go' s
+      elses' <- concatMapM elsePart elses
+      elseMb' <- maybe (return []) go' elseMb
+      cond' <- pre cond
+      return (cond' ++ elses' ++ elseMb')
     go (Loop from untl _inv body _var) = do
       from' <- go' from
       untl' <- concatMapM (pre . clauseExpr) untl 
@@ -59,8 +66,8 @@ allPreConditions = go
     go e = error ("allPreConditions.go: " ++ show e)
 
 -- | The monadic equivalent of the non-monadic list function.
-concatMapM :: Monad m => (a -> m [b]) -> [a] -> m [b]
-concatMapM f xs = concat `liftM` mapM f xs
+concatMapM :: (Functor m, Monad m) => (a -> m [b]) -> [a] -> m [b]
+concatMapM f xs = concat <$> mapM f xs
 
 texprAssert' :: (FeatureEx TExpr -> [Clause TExpr]) 
                 -> TExpr 
@@ -72,7 +79,8 @@ texprAssert' select = go'
         callPreTExprs <- texprAssert select trg name
         rest <- concatMapM go' (trg : args)
         return (tNeqNull trg : rest ++ callPreTExprs)
-    go (T.Access trg _ _) = (tNeqNull trg :) `liftM` go' trg
+    go (T.EqExpr _ e1 e2) = (++) <$> go' e1 <*> go' e2
+    go (T.Access trg _ _) = (tNeqNull trg :) <$> go' trg
     go (T.Old e) = go' e
     go (T.CurrentVar _)      = return []
     go (T.Attached _ e _)    = go' e
@@ -90,10 +98,10 @@ texprAssert' select = go'
     go (T.LitArray _)  = error "preCond: unimplemented LitArray"
     go (T.Tuple _)     = error "preCond: unimplemented Tuple"
     go (T.Agent _ _ _ _) = error "preCond: unimplemented Agent"
-
+    go e = error $ "texprAssert': unimplemented " ++ show e
 
 readerLookup :: String -> InterfaceReaderM (Maybe (AbsClas EmptyBody TExpr))
-readerLookup typeName = envLookup typeName `fmap` ask
+readerLookup typeName = envLookup typeName <$> ask
 
 texprAssert :: (FeatureEx TExpr -> [Clause TExpr]) 
             -> TExpr 

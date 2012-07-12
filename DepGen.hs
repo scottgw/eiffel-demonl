@@ -6,20 +6,12 @@ import Control.Monad.Identity
 import Control.Monad.Reader
 
 import Data.Char
-import Data.List
-import qualified Data.Map as Map
-import Data.Map (Map)
 
 import Language.Eiffel.Syntax
-import Language.Eiffel.Position
 import Language.Eiffel.Util
-import Language.Eiffel.Parser.Parser
 
 import Text.Parsec.Error
 import Text.Parsec.Pos
-
-import System.FilePath
-import System.FilePath.Find
 
 import ClassEnv
 
@@ -79,10 +71,10 @@ hasClas :: ClassName -> [ClassOrGeneric] -> Bool
 hasClas "DOUBLE"    = hasClas "REAL_64"
 hasClas "CHARACTER" = hasClas "CHARACTER_8"
 hasClas "STRING"    = hasClas "STRING_8"
-hasClas cn = 
-  let clasGenName (Class cn) = className cn
+hasClas cName = 
+  let clasGenName (Class c) = className c
       clasGenName (Gen gen) = className gen
-  in any ((==) cn . clasGenName)
+  in any ((==) cName . clasGenName)
 
 depDecl :: [ClassOrGeneric] -> Decl -> DepM [ClassOrGeneric]
 depDecl acc (Decl _ t) = depTyp acc t

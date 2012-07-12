@@ -25,12 +25,15 @@ import ClassEnv
 import DepGen
 import DomainGen
 import GenerateSummaries
-import Instrument
+import InstrumentClass
+
+workQueueFile = "work_queue.e"
+testFile = "test.e"
 
 regen = do
   genAllSummaries
   pwd <- getCurrentDirectory
-  writeDomain $ pwd </> "test" </> "work_queue.e"
+  writeDomain $ pwd </> "test" </> testFile
 
 getDomain file = do
   classEi <- parseClassFile file
@@ -38,7 +41,7 @@ getDomain file = do
     Left err -> error $ "getDomain: " ++  show err
     Right cls -> do
       classInts <- Map.elems `fmap` readAllSummaries
-      case depGen (makeEnv classInts) "work_queue" of
+      case depGen (makeEnv classInts) "test" of
         Left err -> error $ "getDomain: " ++ show err
         Right domainInts -> 
           case clasM classInts cls of 
@@ -54,7 +57,9 @@ getDomainFile file = do
     Left err -> error $ "getDomain: " ++  show err
     Right cls -> do
       classInts <- Map.elems `fmap` readAllSummaries
+      putStrLn "Read summaries"
       domainInts <- readDomain
+      putStrLn "Read domain"
       case clasM classInts cls of 
         Left err -> error $ "getDomain: " ++  err
         Right tCls -> return (domainInts, tCls)
@@ -69,11 +74,12 @@ writeDomain file = do
 main :: IO ()
 main = do
   currDir <- getCurrentDirectory
-  let testFile = currDir </> "test" </> "work_queue.e"
-  (typedDomain, typedClass) <- getDomainFile testFile
+  let testPath = currDir </> "test" </> testFile 
+  (typedDomain, typedClass) <- getDomainFile testPath
+  putStrLn "Typed"
   let flatEnv = flattenEnv $ makeEnv typedDomain
-  print (PP.toDoc $ untype $ instrument flatEnv "dequeue" typedClass)
-  domain typedClass flatEnv
+  print (PP.toDoc $ untype $ instrument flatEnv "test2" typedClass)
+  domain "test2" typedClass flatEnv
 
 
 block :: (t, [PosAbsStmt a]) -> (t, AbsStmt a)

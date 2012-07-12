@@ -63,10 +63,10 @@ exprIndicators = go'
         go (T.EqExpr _ e1 e2) = go' e1 `Set.union` go' e2
         go _ = Set.empty
 
-domain :: AbsClas (RoutineBody TExpr) TExpr -> TInterEnv -> IO ()
-domain clas flatEnv =
+domain :: String -> AbsClas (RoutineBody TExpr) TExpr -> TInterEnv -> IO ()
+domain featureName clas flatEnv =
   let Just rout :: Maybe (AbsRoutine (RoutineBody TExpr) TExpr) = 
-                    findFeature clas "dequeue"
+                    findFeature clas featureName
 
       pres :: [TExpr]
       pres = nub $ runInterfaceReader (allPreConditions $ contents $ routineBody (routineImpl rout)) flatEnv

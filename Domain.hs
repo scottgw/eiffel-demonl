@@ -68,7 +68,15 @@ teToD curr' te = go curr' (contents te)
     go curr (T.Call trg name args _) = 
       let dtrg = go' curr trg
           ClassType cn _ = texpr trg
-      in D.Call (cn ++ "_" ++ name) (dtrg : map (go' dtrg) args)
+          expr = D.Call (cn ++ "_" ++ name) (dtrg : map (go' dtrg) args)
+          withBinOp o = D.BinOpExpr o dtrg (go' curr $ head args)
+      in if cn == "INTEGER_32" && length args == 1
+         then case name of
+                "product" -> withBinOp D.Mul
+                "plus"    -> withBinOp D.Add
+                "is_greater" -> withBinOp (D.RelOp D.Gt)
+                _ -> error $ "teToD: " ++ show expr
+         else expr
     go curr (T.Access trg name _)    = D.Access (go' curr trg) name
     go curr (T.EqExpr op e1 e2) = 
       D.BinOpExpr (dEqOp op) (go' curr e1) (go' curr e2)
@@ -113,7 +121,7 @@ replaceExpr new old = go
 replaceExprNoOld :: D.Expr -> D.Expr -> D.Expr -> D.Expr
 replaceExprNoOld new old = go
   where 
-    rep = replaceExpr new old
+    rep = replaceExprNoOld new old
     go e | e == old           = new
     go (D.Call name args)     = D.Call name (map rep args)
     go (D.Access trg name)    = D.Access (rep trg) name

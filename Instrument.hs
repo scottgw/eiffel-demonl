@@ -1,4 +1,4 @@
-module Instrument (instrument) where
+module Instrument  where
 
 import Control.Applicative
 import Control.Monad
@@ -16,16 +16,49 @@ import Language.Eiffel.Position
 
 import Language.Eiffel.TypeCheck.TypedExpr as T
 
+import qualified Language.DemonL.Types as D
 import qualified Language.DemonL.AST as D
 import Language.DemonL.PrettyPrint
 
-import ClassEnv
 import Domain
 import Util
 
 -- | The state monad built on the reader, with the list of assertions
 -- for the weakest precondition.
 type EnvM = StateT [D.Expr] EnvReaderM
+
+-- C-like if AST, a simple conversion from the regular Eiffel AST one.
+
+data CIf = CStmt T.TStmt
+         | CIf T.TExpr T.TStmt (Maybe CIf)
+
+convertCIf :: T.TExpr 
+           -> T.TStmt 
+           -> [E.ElseIfPart T.TExpr] 
+           -> Maybe T.TStmt 
+           -> CIf
+convertCIf cond then_ [] elseMb = CIf cond then_ (fmap CStmt elseMb)
+convertCIf cond then_ (E.ElseIfPart cond2 then2 : elseParts) elseMb = 
+  CIf cond then_ (Just $ convertCIf cond2 then2 elseParts elseMb)
+
+convertEIf :: CIf -> TStmt
+convertEIf (CStmt s) = s
+convertEIf cif =
+  let 
+    go (CIf c t eMb) =
+      case eMb of
+        Nothing -> ([E.ElseIfPart c t], Nothing)
+        Just (CStmt s) -> ([E.ElseIfPart c t], Just s)
+        Just cif' ->
+          let (elses, elseMb') = go cif'
+          in (E.ElseIfPart c t : elses, elseMb')
+    (E.ElseIfPart cond then_:es, elseMb) = go cif
+   in p0 $ If cond then_ es elseMb
+ 
+
+dand = D.BinOpExpr D.And
+dnot = D.UnOpExpr D.Not
+dimplies = D.BinOpExpr D.Implies
 
 -- | The heart of the instrumentation of statements.
 -- Given a statement, a new statement and a list of assertions
@@ -39,12 +72,35 @@ stmt' =
     go :: UnPosTStmt -> EnvM UnPosTStmt
     go (Block blkBody) = do
       blkBody' <- mapM stmtM (reverse blkBody)
-      meldCall (Block $ reverse blkBody')
-    
+      return (Block $ reverse blkBody')
     go (Assign trg src) = do
       modify (\ ens -> replaceClause ens trg src)
       meldCall (Assign trg src)
-    
+   
+    -- deal with condition preconditions
+    go (If cond then_ elseParts elseMb) =
+      let cif = convertCIf cond then_ elseParts elseMb
+          ifImplies c e1 e2 = [dimplies c e1, dimplies (dnot c) e2]
+
+          ifGo :: CIf -> EnvM CIf
+          ifGo (CStmt s) = CStmt <$> stmtM s
+          ifGo (CIf cCond cThen cElseMb) = do
+            let condD = teToDCurr cCond
+            r <- get
+            cThen' <- stmtM cThen
+            r' <- get
+            case cElseMb of
+              Nothing -> do
+                put (ifImplies condD (dConj r') (dConj r))
+                return $ CIf cCond cThen' Nothing
+              Just cElse -> do
+                put r
+                else_' <- ifGo cElse
+                r'' <- get
+                put (ifImplies condD (dConj r') (dConj r''))
+                return $ CIf cCond cThen' (Just else_')
+      in meldCall =<< contents <$> convertEIf <$> ifGo cif
+
     go (CallStmt e) = do
       let Call trg _ _ _ = contents e
       pre <- lift (liftToEnv $ preCond e)
@@ -73,22 +129,63 @@ weakestPreCall :: D.Expr -> [D.Expr] -> D.Expr
 weakestPreCall post qs = 
   let 
     nonOlds :: [D.Expr]
-    nonOlds = reverse $ nonOldExprs post
+    nonOlds = reverse $ sortBy subExprOrd $ Set.toList $ nonConstExprs $ nonOldExprs post
       
     existName :: Integer -> String
-    existName i = "ex____" ++ show i
+    existName i = "ex__" ++ show i
     
     replaceUpdated :: D.Expr -> Integer -> D.Expr -> (Integer, D.Expr)
     replaceUpdated nonOldPart i inExpr = 
-      let newExpr = replaceExprNoOld (D.Var $ existName i) nonOldPart inExpr
+      let newExpr = replaceExprNoOld exName nonOldPart inExpr
+          exName = D.Var (existName i)
       in (i + 1, newExpr) 
+   
+    useQuantVar :: Integer -> [D.Expr] -> D.Expr -> (Integer, [D.Expr]) 
+    useQuantVar i exprs nonOld = mapAccumL (replaceUpdated nonOld) i exprs
     
-    useQuantVar i exprs nonOldPart = mapAccumL (replaceUpdated nonOldPart) i exprs
+    (n, post': qs') = foldl (uncurry useQuantVar) (0, post:qs) nonOlds
     
-    (post': qs') = snd $ Set.foldl (uncurry useQuantVar) (0, post:qs) nonOlds
-  in D.BinOpExpr D.Implies post' (dConj qs')
+    postImpliesQs = D.BinOpExpr D.Implies (unOld post') (dConj qs')
+
+    qvars = map (\name -> D.Decl name D.IntType) (Set.toList $ freeQVar postImpliesQs)
+
+  in D.ForAll qvars postImpliesQs
 
 
+unOld :: D.Expr -> D.Expr
+unOld = go
+  where
+    go (D.Call name args) = D.Call name (map go args)
+    go (D.BinOpExpr op e1 e2) = D.BinOpExpr op (go e1) (go e2)
+    go (D.UnOpExpr D.Old e) = go e
+    go (D.UnOpExpr o e) = D.UnOpExpr o (go e)
+    go (D.ForAll ds e) = D.ForAll ds (go e)
+    go e = e
+
+-- | Get the free variables in an expression
+freeQVar :: D.Expr -> Set String
+freeQVar = go
+  where
+    go (D.Call _ args) = Set.unions (map go args)
+    go (D.Var str) 
+       | isQVar str = Set.singleton str
+       | otherwise  = Set.empty
+    go (D.BinOpExpr _ e1 e2) = Set.union (go e1) (go e2)
+    go (D.UnOpExpr _ e) = go e
+    go (D.ForAll ds e)  =
+        let boundQVars = (filter isQVar . map D.declName) ds
+        in Set.difference (go e) (Set.fromList boundQVars)
+    go _ = Set.empty
+
+-- Is quantified variable name?
+isQVar :: String -> Bool
+isQVar str = "ex__" `isPrefixOf` str
+
+-- Ordering based on subexpressions.
+subExprOrd e1 e2
+  | Set.member e1 (properSubExprs e2) = LT
+  | Set.member e2 (properSubExprs e1) = GT
+  | otherwise = compare e1 e2
 
 -- | Prefix a statement with a call to demonL with the weakest precondition.
 stmtM :: TStmt -> EnvM TStmt
@@ -101,15 +198,27 @@ stmtM s = do
 -- This may be used to approximate the things that may have changed
 -- as specificed by a postcondition.
 nonOldExprs :: D.Expr -> Set D.Expr
-nonOldExprs e =
-  let subs = properSubExprs e
-      noOlds = undefined 
-      noVars = Set.filter (not . isVar) subs
-  in noVars
+nonOldExprs = 
+  Set.filter (not .  isOld) . Set.filter (not . isVar) . properSubExprs
 
+-- | Is the demonL expression 'Old'? 
+isOld (D.UnOpExpr D.Old _) = True
+isOld _ = False
+
+-- | Is this a 'Var' AST node?
 isVar :: D.Expr -> Bool
 isVar (D.Var _) = True
 isVar _ = False
+
+
+nonConstExprs :: Set D.Expr -> Set D.Expr
+nonConstExprs = 
+ let isConst (D.LitInt _) = True
+     isConst (D.LitNull) = True
+     isConst (D.BinOpExpr _ _ _) = True
+     isConst (D.UnOpExpr _ _) = True
+     isConst _ = False
+ in Set.filter (not . isConst)
 
 -- | Proper subexpressions of a given expression.
 -- This will surely break for cyclical ASTs.
@@ -212,43 +321,3 @@ p0 = attachEmptyPos
 replaceClause :: [D.Expr] -> TExpr -> TExpr -> [D.Expr]
 replaceClause clauses old new = 
   map (replaceExpr (teToDCurr old) (teToDCurr new)) clauses  
-
--- | Instrument a particular statement.
-stmt :: Typ -> TInterEnv -> [Decl] -> [D.Expr] -> TStmt -> (TStmt, [D.Expr])
-stmt currType env decls ens s = 
-  runEnvReader (runStateT (stmtM s) ens) (Env env currType decls)
-
--- | Instrument a routine body.
-instrumentBody :: Typ
-                  -> TInterEnv 
-                  -> Contract TExpr
-                  -> [Decl]
-                  -> RoutineBody TExpr 
-                  -> RoutineBody TExpr
-instrumentBody currType env ens decls (RoutineBody locals localProc body) =
-  let 
-    ensD = map (teToDCurr . clauseExpr) (contractClauses ens)
-    body' = fst $ stmt currType env decls ensD  body
-  in RoutineBody locals localProc body'
-instrumentBody _ _ _ _ r = r
-
--- | Instrument a routine.
-instrumentRoutine :: TInterEnv
-                     -> Typ
-                     -> AbsRoutine (RoutineBody TExpr) TExpr 
-                     -> AbsRoutine (RoutineBody TExpr) TExpr
-instrumentRoutine env typ r = 
-  let decls = routineDecls r
-  in r {routineImpl = instrumentBody typ env (routineEns r) decls (routineImpl r)}
-
-
--- | Instrument a class, but only the given routine name.
-instrument :: TInterEnv 
-              -> String 
-              -> AbsClas (RoutineBody TExpr) TExpr 
-              -> AbsClas (RoutineBody TExpr) TExpr
-instrument env routName clas = 
-  classMapRoutines (\r -> if featureName r == routName
-                          then instrumentRoutine env (classToType clas) r
-                          else r) clas
-

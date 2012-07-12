@@ -23,7 +23,7 @@ localDir :: [String]
 localDir = homeDir ++ ["local"]
 
 libraryDir :: [String]
-libraryDir = localDir ++ ["Eiffel70","library"]
+libraryDir = localDir ++ ["Eiffel71","library"]
 
 libraryNames :: [String]
 libraryNames = ["base2","base","thread","test"]
