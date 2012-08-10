@@ -8,6 +8,10 @@ import Control.Applicative
 import Control.Monad.Trans.Reader
 import Control.Monad.Identity
 
+import Data.Maybe
+
+import qualified Language.DemonL.AST as D
+
 import Language.Eiffel.Syntax as E hiding (select)
 import Language.Eiffel.Util
 import Language.Eiffel.Position
@@ -19,6 +23,7 @@ import ClassEnv
 -- the current arguments, as well as the `Current` type.
 data Env = Env
   { envInterfaces :: TInterEnv
+  , envRely    :: D.Expr
   , envCurrent :: Typ
   , envArgs :: [Decl]
   }
@@ -103,13 +108,22 @@ texprAssert' select = go'
 readerLookup :: String -> InterfaceReaderM (Maybe (AbsClas EmptyBody TExpr))
 readerLookup typeName = envLookup typeName <$> ask
 
+readerLookup' :: String -> InterfaceReaderM (AbsClas EmptyBody TExpr)
+readerLookup' typeName = do
+  e <- ask
+  case envLookup typeName e of
+    Nothing -> error $ "readerLookup': couldn't fine " ++ 
+                        typeName ++ 
+                        "\n environment: " ++ unlines (envKeys e)
+    Just c -> return c
+
 texprAssert :: (FeatureEx TExpr -> [Clause TExpr]) 
             -> TExpr 
             -> String 
             -> InterfaceReaderM [T.TExpr]
 texprAssert select targ name = do
   let ClassType typeName _ = texpr targ
-  Just iface <- readerLookup typeName
+  iface <- readerLookup' typeName
   case findFeatureEx iface name of
     Just feat -> return $ map clauseExpr (select feat)
     Nothing -> error $ "texprPre: can't find feature: " ++ show targ ++ "." ++ name    

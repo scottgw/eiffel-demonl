@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<system 
+    xmlns="http://www.eiffel.com/developers/xml/configuration-1-8-0" 
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+    xsi:schemaLocation="http://www.eiffel.com/developers/xml/configuration-1-8-0 http://www.eiffel.com/developers/xml/configuration-1-8-0.xsd" 
+    name="instrument_tools" 
+    uuid="D7B0F14B-F585-4D85-8BE3-129A1C0302C2"
+    library_target="instrument_tools"
+    >
+  <target name="instrument_tools">
+    <option warning="true" syntax="provisional">
+      <assertions precondition="true" postcondition="true" check="true" invariant="true" loop="true" supplier_precondition="true"/>
+    </option>
+    <library name="base" location="$ISE_LIBRARY\library\base\base.ecf"/>
+    <library name="time" location="$ISE_LIBRARY\library\time\time.ecf"/>
+    <cluster name="instrument_tools" location=".\" recursive="true">
+      <file_rule>
+        <exclude>/EIFGENs$</exclude>
+        <exclude>/CVS$</exclude>
+        <exclude>/.svn$</exclude>
+      </file_rule>
+    </cluster>
+  </target>
+</system>

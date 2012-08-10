@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<system xmlns="http://www.eiffel.com/developers/xml/configuration-1-7-0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.eiffel.com/developers/xml/configuration-1-7-0 http://www.eiffel.com/developers/xml/configuration-1-7-0.xsd" name="demon" uuid="DD36848D-D4D0-49F5-A278-63D735950832">
+  <target name="demon">
+    <root class="APPLICATION" feature="make"/>
+    <!-- <option profile="true" warning="true"> -->
+    <option warning="true" syntax="provisional">
+      <assertions precondition="true" postcondition="true" check="true" invariant="true" loop="true" supplier_precondition="true"/>
+    </option>
+    <setting name="concurrency" value="thread"/>
+    <library name="instrument_tools" location="../instrument_tools/instrument_tools.ecf"/>
+    <library name="base" location="$ISE_LIBRARY\library\base\base.ecf"/>
+    <library name="testing" location="$ISE_LIBRARY\library\testing\testing.ecf"/>
+    <library name="thread" location="$ISE_LIBRARY\library\thread\thread.ecf"/>
+   <library name="time" location="$ISE_LIBRARY\library\time\time.ecf"/>
+    <cluster name="demon" location=".\" recursive="true">
+      <file_rule>
+        <exclude>work_queue.e</exclude>
+        <exclude>/build$</exclude>
+        <exclude>/EIFGENs$</exclude>
+        <exclude>/old$</exclude>
+        <exclude>/tests$</exclude>
+        <exclude>/CVS$</exclude>
+        <exclude>/.svn$</exclude>
+      </file_rule>
+    </cluster>
+  </target>
+</system>

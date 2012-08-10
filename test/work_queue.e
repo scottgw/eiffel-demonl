@@ -78,7 +78,8 @@ feature
 
 			mutex.unlock
 		ensure
-			done = (Result = Void)
+            rely: True or False
+            finished: done = (Result = Void)
 		end
 
 	make_done

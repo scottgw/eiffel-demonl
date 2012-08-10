@@ -3,13 +3,15 @@ module DomainGen where
 
 import Data.List (nub)
 
+import Data.Maybe
+
 import qualified Data.Map as Map
 import Data.Map (Map)
 
 import qualified Data.Set as Set
 import Data.Set (Set)
 
-import Language.DemonL.PrettyPrint
+import qualified Language.DemonL.AST as D
 
 import Language.Eiffel.Syntax as E hiding (select)
 import Language.Eiffel.Util
@@ -19,18 +21,59 @@ import Language.Eiffel.TypeCheck.TypedExpr as T
 import ClassEnv
 import Domain
 import Util
+import SpecialSerialization
+
+
+-- | Generate the minimal domain and also the extra instrumentation
+-- class necessary for the nullary 
+domain :: String 
+          -> AbsClas (RoutineBody TExpr) TExpr 
+          -> TInterEnv 
+          -> (D.DomainU, Clas)
+domain featureName clas flatEnv =
+  (dom, extraInstrClass)
+  where 
+    Just rout = findFeature clas featureName
+
+    pres :: [TExpr]
+    pres = nub 
+           (runInterfaceReader 
+            (allPreConditions 
+             (contents (routineBody (routineImpl rout)))) 
+            flatEnv)
+      
+    typesAndNames :: [Set (Typ, Set String)]
+    typesAndNames = map (domActions flatEnv) pres
+    
+    typeNameMap :: Map Typ (Set String)
+    typeNameMap = collectNames (Set.unions typesAndNames)
+
+    domainClasses = Map.mapWithKey (cutDownClass flatEnv) typeNameMap
+      
+    -- Include the generation of the EXTRA_INSTR class
+    -- this should be based on the type-map where for each clas -> feature
+    -- the feature is examined if it has no arguments, if so (and it is a 
+    -- routine) then it goes into the EXTRA_INSTR.
+      
+    dom = makeDomain $ Map.elems domainClasses
+    extraInstrClass = extraInstrs flatEnv typeNameMap
+    
+
+-------------------------------------
+-- Implementy bits
+--
 
 data Indicator = Indicator Typ String deriving (Eq, Ord, Show)
-indicatorTuple (Indicator t name) = (t, name)
+indicatorTuple (Indicator t name) = (t, Set.singleton name)
 
-data Action = 
+data Action =
   Action { actionType :: Typ 
          , actionName :: String 
          } deriving (Eq, Ord, Show)
 
-actionTuple (Action t name) = (t, name)
+actionTuple (Action t name) = (t, Set.singleton name)
 
-domActions :: TInterEnv -> T.TExpr -> Set (Typ, String)
+domActions :: TInterEnv -> T.TExpr -> Set (Typ, Set String)
 domActions env e = 
   let eIndicators = exprIndicators e
       -- Desired interface:
@@ -63,31 +106,28 @@ exprIndicators = go'
         go (T.EqExpr _ e1 e2) = go' e1 `Set.union` go' e2
         go _ = Set.empty
 
-domain :: String -> AbsClas (RoutineBody TExpr) TExpr -> TInterEnv -> IO ()
-domain featureName clas flatEnv =
-  let Just rout :: Maybe (AbsRoutine (RoutineBody TExpr) TExpr) = 
-                    findFeature clas featureName
 
-      pres :: [TExpr]
-      pres = nub $ runInterfaceReader (allPreConditions $ contents $ routineBody (routineImpl rout)) flatEnv
-
-      typesAndNames :: [Set (Typ, String)]
-      typesAndNames = map (domActions flatEnv) pres
-
-      typeNameMap :: Map Typ (Set String)
-      typeNameMap = collectNames (Set.unions typesAndNames)
-
-      domainClasses = Map.mapWithKey (cutDownClass flatEnv) typeNameMap
-  in  print (domainDoc untypeExprDoc $ makeDomain $ Map.elems domainClasses)
-
+extraInstrs :: TInterEnv -> Map Typ (Set String) -> Clas
+extraInstrs env = extractClass . Map.toList . onlyNullary 
+  where
+    -- only leave the nullary features
+    onlyNullary = Map.mapWithKey (Set.filter . isNullary)
+      
+    -- does the feature of the type have no arguments?
+    isNullary typ featureName = 
+      let clas   = fromMaybe (error "extraInstrs: couldn't find type")
+                             (envLookupType typ env)
+          featMb = findFeature clas featureName
+      in case featMb of
+        Just feat -> null (routineArgs feat) && routineResult feat /= NoType
+        Nothing   -> False
 
 cutDownClass :: TInterEnv -> Typ -> Set String -> AbsClas EmptyBody TExpr
 cutDownClass flatEnv typ names =
   let Just clas = envLookupType typ flatEnv
-      undefineNames = Set.fromList (map featureName (allFeatures clas :: [FeatureEx TExpr])) Set.\\ names
+      featureNames  = map featureName (allFeatures clas :: [FeatureEx TExpr])
+      undefineNames = Set.fromList featureNames Set.\\ names
   in Set.fold undefineName clas undefineNames
   
-collectNames :: Set (Typ, String) -> Map Typ (Set String)
-collectNames = Set.fold go Map.empty
-  where go (t, name) = 
-          Map.insertWith (Set.union) t (Set.singleton name)
+collectNames :: Set (Typ, Set String) -> Map Typ (Set String)
+collectNames = Map.fromListWith Set.union . Set.toList 

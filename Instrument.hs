@@ -279,7 +279,8 @@ preCond = go . contents
 meldCall :: UnPosTStmt -> EnvM UnPosTStmt
 meldCall s = do
   pre <- get
-  Env _ currType decls <- lift $ ask
+  
+  Env _ rely currType decls <- lift $ ask
   let 
     tuple x y = p0 $ T.Tuple [x, y]
     curr = p0 $ T.CurrentVar currType
@@ -292,12 +293,13 @@ meldCall s = do
     array :: [T.TExpr] -> T.TExpr
     array = p0 . T.LitArray
 
-    rely :: [T.TExpr] -> T.TExpr
-    rely es = p0 $ T.Call curr "rely_call" es NoType
+    relyCall :: [T.TExpr] -> T.TExpr
+    relyCall es = p0 $ T.Call curr "rely_call" es NoType
 
     precondStr = show $ untypeExprDoc $ dConj $ nub pre
+    relyStr    = show $ untypeExprDoc rely
 
-    _agent = p0 . T.Agent
+    agent = p0 (T.Agent curr "extra_instr" [] NoType)
 
     declTup (Decl n t) = tuple (string n) (var n t)
 
@@ -306,11 +308,16 @@ meldCall s = do
       array (tuple (string "this") curr : map declTup decls)
 
     args :: [T.TExpr]
-    args = [declArray, string precondStr]
+    args = [ p0 $ T.LitInt 0
+           , declArray
+           , string precondStr
+           , string relyStr
+           , agent
+           ]
 
-    relyCall :: TStmt
-    relyCall = p0 $ E.CallStmt $ rely args
-  return (Block [relyCall, p0 s])
+    relyCall' :: TStmt
+    relyCall' = p0 $ E.CallStmt $ relyCall args
+  return (Block [relyCall', p0 s])
 
 
 p0 :: a -> Pos a

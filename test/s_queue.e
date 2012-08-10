@@ -9,7 +9,7 @@ inherit
 feature
   default_create
     do
-      create queue_.make (10)
+      create queue_.make
     end
 
 feature

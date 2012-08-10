@@ -2,6 +2,8 @@ module InstrumentClass where
 
 import Control.Monad.Trans.State
 
+import Data.List (partition)
+
 import qualified Language.DemonL.AST as D
 import Language.Eiffel.Syntax as E hiding (select)
 import Language.Eiffel.Util
@@ -13,9 +15,10 @@ import Util
 import Instrument
 
 -- | Instrument a particular statement.
-stmt :: Typ -> TInterEnv -> [Decl] -> [D.Expr] -> TStmt -> (TStmt, [D.Expr])
-stmt currType env decls ens s = 
-  runEnvReader (runStateT (stmtM s) ens) (Env env currType decls)
+stmt :: Typ -> TInterEnv -> D.Expr -> [Decl] 
+        -> [D.Expr] -> TStmt -> (TStmt, [D.Expr])
+stmt currType env rely decls ens s = 
+  runEnvReader (runStateT (stmtM s) ens) (Env env rely currType decls)
 
 -- | Instrument a routine body.
 instrumentBody :: Typ
@@ -25,9 +28,15 @@ instrumentBody :: Typ
                   -> RoutineBody TExpr 
                   -> RoutineBody TExpr
 instrumentBody currType env ens decls (RoutineBody locals localProc body) =
-  let 
-    ensD = map (teToDCurr . clauseExpr) (contractClauses ens)
-    body' = fst $ stmt currType env decls ensD  body
+  let
+    (relies, other) = partition 
+                      ((== Just "rely") . clauseName) 
+                      (contractClauses ens)
+    rely = case relies of
+      []  -> D.LitBool True
+      r:_ -> teToDCurr (clauseExpr r)
+    ensD = map (teToDCurr . clauseExpr) other
+    body' = fst $ stmt currType env rely decls ensD  body
   in RoutineBody locals localProc body'
 instrumentBody _ _ _ _ r = r
 
@@ -47,7 +56,19 @@ instrument :: TInterEnv
               -> AbsClas (RoutineBody TExpr) TExpr 
               -> AbsClas (RoutineBody TExpr) TExpr
 instrument env routName clas = 
-  classMapRoutines (\r -> if featureName r == routName
-                          then instrumentRoutine env (classToType clas) r
-                          else r) clas
+  withInherit (classMapRoutines updateFeature clas)
 
+  where
+    simpleInherit n  = InheritClause (ClassType n []) [] [] [] [] []
+    
+    addInherit :: [String] -> Inheritance
+    addInherit cs = Inheritance False (map simpleInherit cs)
+
+    withInherit clas =
+      clas { inherit = 
+                addInherit ["PLAN_UTILITIES", "EXTRA_INSTR"] : inherit clas
+           }
+    
+    updateFeature r 
+      | featureName r == routName = instrumentRoutine env (classToType clas) r
+      | otherwise = r

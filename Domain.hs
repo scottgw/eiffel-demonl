@@ -19,15 +19,24 @@ mergeDomains (Domain types1 procs1 funcs1) (Domain types2 procs2 funcs2) =
     Domain (types1 ++ types2) (procs1 ++ procs2) (funcs1 ++ funcs2)
 
 fromClass :: AbsClas body TExpr -> DomainU
-fromClass clas = 
-    let attrs = map fromAttr (allAttributes clas)
-        struct = Struct (className clas) attrs
-        (prcds, funcs) = 
-          partitionEithers $ map (fromRoutine clas) (allRoutines clas)
-    in Domain [struct] prcds funcs
+fromClass clas =
+    let
+      typeName = className clas
+      attrs    = map (fromAttr typeName) (allAttributes clas)
+      struct   = Struct typeName []
+      (prcds, funcs) = 
+        partitionEithers $ map (fromRoutine clas) (allRoutines clas)
+    in Domain [struct] prcds (attrs ++ funcs)
 
-fromAttr :: Attribute TExpr -> D.Decl
-fromAttr attr = fromDecl (attrDecl attr)
+fromAttr :: String -> Attribute TExpr -> ProcedureU
+fromAttr typeName attr = prcd
+  where
+    E.Decl name type_ = attrDecl attr
+    prcd = Procedure (typeName ++ "_" ++ name)
+                     [this typeName]
+                     (fromType type_)
+                     [] -- no pre or post conditions for an attribute
+                     []
 
 fromType :: E.Typ -> D.Type
 fromType t | t == E.intType = D.IntType
@@ -38,15 +47,20 @@ fromType t = error $ "fromType: " ++ show t
 fromDecl :: E.Decl -> D.Decl
 fromDecl (E.Decl n t) = D.Decl n (fromType t)
 
+this :: String -> D.Decl
+this typeName = D.Decl "this" (StructType typeName [])
+
 thisDecl :: AbsClas body exp -> D.Decl
-thisDecl cls = D.Decl "this" (StructType (className cls) [])
+thisDecl cls = this (className cls)
 
 fromClause :: E.Clause TExpr -> D.Clause D.Expr
 fromClause (E.Clause tagMb expr) = 
     let tag = fromMaybe "no_tag" tagMb
     in D.Clause tag (teToDCurr expr)
 
-fromRoutine :: AbsClas body TExpr -> AbsRoutine abs TExpr -> Either ProcedureU ProcedureU
+fromRoutine :: AbsClas body TExpr 
+               -> AbsRoutine abs TExpr 
+               -> Either ProcedureU ProcedureU
 fromRoutine clas rtn = 
     let prcd = Procedure (className clas ++ "_" ++ featureName rtn)
                          (thisDecl clas : map fromDecl (routineArgs rtn))
@@ -70,12 +84,19 @@ teToD curr' te = go curr' (contents te)
           ClassType cn _ = texpr trg
           expr = D.Call (cn ++ "_" ++ name) (dtrg : map (go' dtrg) args)
           withBinOp o = D.BinOpExpr o dtrg (go' curr $ head args)
-      in if cn == "INTEGER_32" && length args == 1
-         then case name of
-                "product" -> withBinOp D.Mul
-                "plus"    -> withBinOp D.Add
-                "is_greater" -> withBinOp (D.RelOp D.Gt)
-                _ -> error $ "teToD: " ++ show expr
+      in if length args == 1
+         then case cn of
+           "INTEGER_32" -> case name of
+             "product" -> withBinOp D.Mul
+             "plus"    -> withBinOp D.Add
+             "minus"   -> withBinOp D.Sub
+             "is_greater" -> withBinOp (D.RelOp D.Gt)
+             _ -> error $ "teToD INTEGER_32: " ++ show expr
+           "BOOLEAN" -> case name of
+             "disjuncted"  -> withBinOp D.Or
+             "conjuncted"  -> withBinOp D.And
+             "implication" -> withBinOp D.Implies
+             _ -> error $ "teToD BOOLEAN: " ++ show expr
          else expr
     go curr (T.Access trg name _)    = D.Access (go' curr trg) name
     go curr (T.EqExpr op e1 e2) = 

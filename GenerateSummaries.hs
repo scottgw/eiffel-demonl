@@ -65,7 +65,7 @@ genAllSummaries =
   mapM_ (\ (name, dir) -> do
             files <- searchEiffelFiles dir
             genSummary name files) searchDirectories
-  
+
 readAllSummaries :: IO (Map ClassName ClasInterface)
 readAllSummaries = do
   pwd <- getCurrentDirectory
