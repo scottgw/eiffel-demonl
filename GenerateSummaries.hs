@@ -5,7 +5,7 @@ import Data.Either
 import Data.Map (Map)
 
 import Language.Eiffel.Syntax
-import Language.Eiffel.Parser.Parser
+import Language.Eiffel.Parser
 import Language.Eiffel.Summary
 import Language.Eiffel.Util
 
@@ -26,15 +26,14 @@ libraryDir :: [String]
 libraryDir = localDir ++ ["Eiffel71","library"]
 
 libraryNames :: [String]
-libraryNames = ["base2","base","thread","test"]
+libraryNames = ["base2","base","thread"]
 
 searchDirectories :: [(String, FilePath)]
 searchDirectories = zip libraryNames $
   map joinPath 
-    [ srcDir ++ ["eiffelbase2","trunk"]
+    [ srcDir ++ ["eiffelbase2","library"]
     , libraryDir ++ ["base","elks"]
     , libraryDir ++ ["thread","classic"]
-    , srcDir ++ ["eiffel-demonl"]
     ]
 
 -- | Search the argument directories for all Eiffel files.
@@ -52,19 +51,23 @@ findExt dir ext = find (return True) (extension ==? ext) dir
                         
 genSummary :: String -> [FilePath] -> IO ()
 genSummary name pathes = do
-  classesEi <- mapM ( \path -> print path >> parseClassFile path) pathes
+  putStrLn $ "genSummary: " ++ name
+  let parse path = print path >> parseClassFile path
+  classesEi <- mapM parse pathes
   let classes = rights classesEi
       errs = lefts classesEi
       interfaces = map clasInterface classes
   print errs
   pwd <- getCurrentDirectory
+  putStrLn $ "Writing summary for " ++ name
   writeBinarySummary (pwd </> name ++ ifaceExt) interfaces
+  putStrLn $ "Write summary for " ++ name
 
 genAllSummaries :: IO ()
-genAllSummaries =
-  mapM_ (\ (name, dir) -> do
-            files <- searchEiffelFiles dir
-            genSummary name files) searchDirectories
+genAllSummaries = mapM_ (uncurry genSummariesIn) searchDirectories
+
+genSummariesIn :: String -> FilePath -> IO ()
+genSummariesIn name dir = genSummary name =<< searchEiffelFiles dir
 
 readAllSummaries :: IO (Map ClassName ClasInterface)
 readAllSummaries = do
@@ -73,4 +76,4 @@ readAllSummaries = do
   summaries <- mapM readBinarySummary summaryFiles
   -- let interfaces :: [[ClasInterface]] = rights summariesEi
   -- putStrLn (show $ lefts $ summariesEi)
-  return $ clasMap $ concat summaries
+  return $ clasMap (concat summaries)

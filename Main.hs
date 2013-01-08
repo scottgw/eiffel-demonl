@@ -26,3 +26,4 @@ main = do
   let flatEnv = flattenEnv $ makeEnv typedDomain
   print (PP.toDoc $ untype $ instrument flatEnv testFeature typedClass)
   domain testFeature typedClass flatEnv
+  return ()

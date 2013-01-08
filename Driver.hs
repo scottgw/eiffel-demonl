@@ -7,7 +7,7 @@ import qualified Data.ByteString.Lazy as BS
 
 import qualified Data.Map as Map
 
-import Language.Eiffel.Parser.Parser
+import Language.Eiffel.Parser
 import Language.Eiffel.Syntax as E hiding (select)
 import Language.Eiffel.Util
 import Language.Eiffel.Position
@@ -18,7 +18,6 @@ import Language.Eiffel.TypeCheck.Context
 import Language.Eiffel.TypeCheck.TypedExpr as T
 
 import System.Directory
-import System.FilePath
 
 import ClassEnv
 import DepGen
@@ -30,8 +29,17 @@ import GenerateSummaries
 -- require that they be regenerated.
 regenHeader testClass testFile = do
   genAllSummaries
-  pwd <- getCurrentDirectory
+  _pwd <- getCurrentDirectory
   writeDependencies testClass testFile
+
+-- | Used to regenerated the typed binary summaries. The summaries
+-- make the startup time faster, but changes to class interfaces
+-- require that they be regenerated.
+regenHeaderHere testClass testFile = do
+  pwd <- getCurrentDirectory
+  genSummariesIn "pwd_summary" (pwd ++ "/../")
+  writeDependencies testClass testFile
+
 
 -- | For the given class file parse it and track down all
 -- dependencies. Return the typed dependencies as well as
@@ -39,14 +47,14 @@ regenHeader testClass testFile = do
 getDepsAndClass testClass file = do
   classEi <- parseClassFile file
   case classEi of
-    Left err -> error $ "getDomain: " ++  show err
+    Left err -> error $ "getDomain parsing: " ++  show err
     Right cls -> do
       classInts <- Map.elems `fmap` readAllSummaries
       case depGen (makeEnv classInts) testClass of
-        Left err -> error $ "getDomain: " ++ show err
+        Left err -> error $ "getDomain dependecies: " ++ show err
         Right dependentIFaces -> 
           case clasM classInts cls of 
-            Left err -> error $ "getDomain: " ++  err
+            Left err -> error $ "getDomain typechecking: " ++  err
             Right tCls -> do
               tis <- typeInterfaces dependentIFaces
               return (tis, tCls)
@@ -64,7 +72,7 @@ loadDepsAndClass file = do
       domainInts <- readDependencies
       putStrLn "Read domain"
       case clasM classInts cls of 
-        Left err -> error $ "getDomain: " ++  err
+        Left err -> error $ "loadDepsAndClass typechecking: " ++  err
         Right tCls -> return (domainInts, tCls)
 
 

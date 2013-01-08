@@ -5,10 +5,10 @@ note
 	revision: "$Revision$"
 
 class
-	QUEUE_CONDITION [G]
+	QUEUE_CONDITION
 
 inherit
-	NON_EMPTY [G]
+	NON_EMPTY
 
 create
 	make

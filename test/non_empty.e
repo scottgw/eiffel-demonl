@@ -5,16 +5,16 @@ note
 	revision: "$Revision$"
 
 deferred class
-	NON_EMPTY [G]
+	NON_EMPTY
 
 inherit
 	SINGLE_DEP
 
 feature
 
-	work_queue: WORK_QUEUE [G]
+	work_queue: WORK_QUEUE
 
-	set_work_queue (w: WORK_QUEUE [G])
+	set_work_queue (w: WORK_QUEUE)
 		do
 			work_queue := w
 		end

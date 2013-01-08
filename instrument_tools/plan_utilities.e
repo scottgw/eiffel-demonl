@@ -1,24 +1,22 @@
-class
+deferred class
   PLAN_UTILITIES
   
 feature
   rely_call (line: INTEGER;
-             a_objs: ARRAY [TUPLE[name: STRING; obj: ANY]];
+             a_objs: ARRAY [TUPLE[name: STRING; type: STRING;obj: ANY]];
              goal_str: STRING;
-             rely_str: STRING;
-             extra_proc: PROCEDURE [ANY, TUPLE [ANY, STRING, SEXPR_SERIALIZER]])
+             rely_str: STRING
+             serizer: SEXPR_SERIALIZER)
     local
       i: INTEGER
       str: STRING
-      serizer: SEXPR_SERIALIZER
     do
-      create serizer.reset (extra_proc)
       str := ""
       
       from i := 1
       until i > a_objs.count
       loop
-        serizer.serialize (a_objs [i].name, a_objs [i].obj)
+        serizer.serialize (a_objs[i].name, a_objs[i].type, a_objs[i].obj)
         i := i + 1
       end
 
@@ -38,7 +36,7 @@ feature
       inc_num
     end
 
-feature {NONE}
+feature {NONE}  
   write_goal (str: STRING; line: INTEGER)
     local
       file: PLAIN_TEXT_FILE

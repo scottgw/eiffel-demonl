@@ -7,12 +7,12 @@ create
 feature
     make
       local
-          q: WORK_QUEUE [INTEGER]
-          qc: QUEUE_CONDITION [INTEGER]
+          q: WORK_QUEUE
+          qc: QUEUE_CONDITION
       do
         create qc.make
         create q.make (qc)
-        q.enqueue (1)
+        q.enqueue (create {REQUEST})
         print (q.dequeue)
       end
 end

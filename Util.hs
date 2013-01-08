@@ -8,9 +8,7 @@ import Control.Applicative
 import Control.Monad.Trans.Reader
 import Control.Monad.Identity
 
-import Data.Maybe
-
-import qualified Language.DemonL.AST as D
+import qualified Language.DemonL.TypeCheck as DT
 
 import Language.Eiffel.Syntax as E hiding (select)
 import Language.Eiffel.Util
@@ -23,8 +21,9 @@ import ClassEnv
 -- the current arguments, as well as the `Current` type.
 data Env = Env
   { envInterfaces :: TInterEnv
-  , envRely    :: D.Expr
+  , envRely    :: DT.TExpr
   , envCurrent :: Typ
+  , envResult  :: Typ
   , envArgs :: [Decl]
   }
 
@@ -58,11 +57,12 @@ allPreConditions = go
     go (Assign _trg src) = pre src
     go (CallStmt e) = pre e
     go (If cond then_ elses elseMb) = do
+      then' <- go' then_
       let elsePart (ElseIfPart c s) = (++) <$> pre c <*> go' s
       elses' <- concatMapM elsePart elses
       elseMb' <- maybe (return []) go' elseMb
       cond' <- pre cond
-      return (cond' ++ elses' ++ elseMb')
+      return (cond' ++ then' ++ elses' ++ elseMb')
     go (Loop from untl _inv body _var) = do
       from' <- go' from
       untl' <- concatMapM (pre . clauseExpr) untl 
@@ -86,9 +86,9 @@ texprAssert' select = go'
         return (tNeqNull trg : rest ++ callPreTExprs)
     go (T.EqExpr _ e1 e2) = (++) <$> go' e1 <*> go' e2
     go (T.Access trg _ _) = (tNeqNull trg :) <$> go' trg
-    go (T.Old e) = go' e
-    go (T.CurrentVar _)      = return []
-    go (T.Attached _ e _)    = go' e
+    go (T.Old e)          = go' e
+    go (T.CurrentVar _)   = return []
+    go (T.Attached _ e _) = go' e
     go (T.Box _ e)     = go' e
     go (T.Unbox _ e)   = go' e
     go (T.Cast _ e)    = go' e
@@ -97,16 +97,48 @@ texprAssert' select = go'
     go (T.LitInt _)    = return []
     go (T.LitBool _)   = return []
     go (T.LitVoid _)   = return []
-    go (T.LitChar _)   = error "preCond: unimplemented LitChar"
-    go (T.LitString _) = error "preCond: unimplemented LitString"
-    go (T.LitDouble _) = error "preCond: unimplemented LitDouble"
-    go (T.LitArray _)  = error "preCond: unimplemented LitArray"
-    go (T.Tuple _)     = error "preCond: unimplemented Tuple"
-    go (T.Agent _ _ _ _) = error "preCond: unimplemented Agent"
+    go (T.LitChar _)   = error "texprAssert': unimplemented LitChar"
+    go (T.LitString _) = error "texprAssert': unimplemented LitString"
+    go (T.LitDouble _) = error "texprAssert': unimplemented LitDouble"
+    go (T.LitArray _)  = error "texprAssert': unimplemented LitArray"
+    go (T.Tuple _)     = error "texprAssert': unimplemented Tuple"
+    go (T.Agent _ _ _ _) = error "texprAssert': unimplemented Agent"
     go e = error $ "texprAssert': unimplemented " ++ show e
 
-readerLookup :: String -> InterfaceReaderM (Maybe (AbsClas EmptyBody TExpr))
-readerLookup typeName = envLookup typeName <$> ask
+
+replaceTExpr :: T.TExpr
+                -> T.TExpr
+                -> T.TExpr 
+                -> T.TExpr
+replaceTExpr replaceThis withThis inHere = go' inHere
+  where
+    go' :: T.TExpr -> T.TExpr
+    go' = fmap go
+
+    -- FIXME: Is we consider the untyped AST instead of the typed one.
+    -- This is hacky, we only do it because the expressions may come from
+    -- an uninstantiated generic class, and this will bypass that problem.
+    --
+    -- The real fix is to instantiate the other ASTs, but since it only affects
+    -- generics (types) and we only care about AST shapes this should be OK.
+    go e |
+      (untypeExpr' $ contents replaceThis) == untypeExpr' e = contents withThis
+    go (T.Call trg name args t) = 
+      T.Call (go' trg) name (map go' args) t
+    go (T.EqExpr op e1 e2) = T.EqExpr op (go' e1) (go' e2)
+    go (T.Access trg name t) = T.Access (go' trg) name t
+    go (T.Old e)          = T.Old (go' e)
+    go (T.Attached as e t) = T.Attached as (go' e) t
+    go (T.Box t e)     = T.Box t (go' e)
+    go (T.Unbox t e)   = T.Unbox t (go' e)
+    go (T.Cast t e)    = T.Cast t (go' e)
+    go e = e
+
+replaceCurrents :: T.TExpr -> T.TExpr -> [T.TExpr] -> [T.TExpr]
+replaceCurrents oldCurr newCurr = map (replaceTExpr oldCurr newCurr)
+
+-- readerLookup :: String -> InterfaceReaderM (Maybe (AbsClas EmptyBody TExpr))
+-- readerLookup typeName = envLookup typeName <$> ask
 
 readerLookup' :: String -> InterfaceReaderM (AbsClas EmptyBody TExpr)
 readerLookup' typeName = do
@@ -122,11 +154,15 @@ texprAssert :: (FeatureEx TExpr -> [Clause TExpr])
             -> String 
             -> InterfaceReaderM [T.TExpr]
 texprAssert select targ name = do
-  let ClassType typeName _ = texpr targ
+  let t@(ClassType typeName _) = texpr targ
+      oldCurr = fmap (const $ T.CurrentVar t) targ
+      replace feat = 
+        replaceCurrents oldCurr targ (map clauseExpr (select feat))
   iface <- readerLookup' typeName
   case findFeatureEx iface name of
-    Just feat -> return $ map clauseExpr (select feat)
-    Nothing -> error $ "texprPre: can't find feature: " ++ show targ ++ "." ++ name    
+    Just feat -> return $ replace feat
+    Nothing -> error $ "texprPre: can't find feature: " ++ show targ ++ 
+                       "." ++ name    
 
 tNeqNull :: Pos UnPosTExpr -> T.TExpr
 tNeqNull e = 

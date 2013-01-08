@@ -15,6 +15,7 @@
     <cluster name="demon" location=".\" recursive="true">
       <file_rule>
         <exclude>work_queue.e</exclude>
+        <exclude>serializer_template.e</exclude>
         <exclude>/build$</exclude>
         <exclude>/EIFGENs$</exclude>
         <exclude>/old$</exclude>

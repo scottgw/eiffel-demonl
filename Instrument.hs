@@ -10,6 +10,8 @@ import Data.List
 import qualified Data.Set as Set
 import Data.Set (Set)
 
+import Debug.Trace
+
 import Language.Eiffel.Syntax as E hiding (select)
 import Language.Eiffel.Util
 import Language.Eiffel.Position
@@ -17,15 +19,17 @@ import Language.Eiffel.Position
 import Language.Eiffel.TypeCheck.TypedExpr as T
 
 import qualified Language.DemonL.Types as D
+import qualified Language.DemonL.TypeCheck as DT
 import qualified Language.DemonL.AST as D
 import Language.DemonL.PrettyPrint
 
 import Domain
 import Util
+import EiffelBuilder
 
 -- | The state monad built on the reader, with the list of assertions
 -- for the weakest precondition.
-type EnvM = StateT [D.Expr] EnvReaderM
+type EnvM = StateT [DT.TExpr] EnvReaderM
 
 -- C-like if AST, a simple conversion from the regular Eiffel AST one.
 
@@ -52,13 +56,14 @@ convertEIf cif =
         Just cif' ->
           let (elses, elseMb') = go cif'
           in (E.ElseIfPart c t : elses, elseMb')
+    go (CStmt _s) = ([],Nothing)
     (E.ElseIfPart cond then_:es, elseMb) = go cif
    in p0 $ If cond then_ es elseMb
  
 
-dand = D.BinOpExpr D.And
-dnot = D.UnOpExpr D.Not
-dimplies = D.BinOpExpr D.Implies
+dand e1 e2 = DT.BinOpExpr DT.And e1 e2 D.BoolType
+dnot e = DT.UnOpExpr D.Not e D.BoolType
+dimplies e1 e2 = DT.BinOpExpr DT.Implies e1 e2 D.BoolType
 
 -- | The heart of the instrumentation of statements.
 -- Given a statement, a new statement and a list of assertions
@@ -67,25 +72,27 @@ dimplies = D.BinOpExpr D.Implies
 -- and the new statement has a call inserted before it that
 -- goes to the demonic interference tool.
 stmt' :: UnPosTStmt -> EnvM UnPosTStmt
-stmt' = 
+stmt' e = do
+  currT <- fromType <$>  envCurrent <$> lift ask
   let
     go :: UnPosTStmt -> EnvM UnPosTStmt
     go (Block blkBody) = do
       blkBody' <- mapM stmtM (reverse blkBody)
       return (Block $ reverse blkBody')
     go (Assign trg src) = do
-      modify (\ ens -> replaceClause ens trg src)
+      modify (replaceClause currT trg src)
       meldCall (Assign trg src)
    
     -- deal with condition preconditions
     go (If cond then_ elseParts elseMb) =
       let cif = convertCIf cond then_ elseParts elseMb
+          ifImplies :: DT.TExpr -> DT.TExpr -> DT.TExpr -> [DT.TExpr]
           ifImplies c e1 e2 = [dimplies c e1, dimplies (dnot c) e2]
 
           ifGo :: CIf -> EnvM CIf
           ifGo (CStmt s) = CStmt <$> stmtM s
           ifGo (CIf cCond cThen cElseMb) = do
-            let condD = teToDCurr cCond
+            let condD = teToDCurr currT cCond
             r <- get
             cThen' <- stmtM cThen
             r' <- get
@@ -102,78 +109,79 @@ stmt' =
       in meldCall =<< contents <$> convertEIf <$> ifGo cif
 
     go (CallStmt e) = do
-      let Call trg _ _ _ = contents e
-      pre <- lift (liftToEnv $ preCond e)
+      preT <- lift (liftToEnv $ texprAssert' featurePre e) -- used to be: preCond currT e
+      let pre = map (teToDCurr currT) preT
       posts <- lift (liftToEnv $ texprAssert' featurePost e) -- ignores call chain
-      newPre <- weakestPreCallM (dConj $ nub $ map teToDCurr posts) 
+      newPre <- weakestPreCallM (dConj $ nub $ map (teToDCurr currT) posts)
       put (pre ++ [newPre]) -- TODO: perform weakest precondition calculation
       meldCall (CallStmt e)
         
     -- TODO: Deal with until, invariant, and variant as well
-    go (Loop from inv untl body var) = do 
+    go (Loop from inv untl body vari) = do 
       body' <- stmtM body
       from' <- stmtM from
       when (null inv) $ put []
-      meldCall (Loop from' inv untl body' var)
+      meldCall (Loop from' inv untl body' vari)
     go e = error ("stmt'go: " ++ show e)
-  in go
+  go e
 
 -- | Create weakest precondition expression from a function's postcondition.
 -- The input postcondition should be preconverted to the DemonL expression
 -- type, including using the correct 'Current' type, probably taken from
 -- the originating target of the postcondition's call.
-weakestPreCallM :: D.Expr -> EnvM D.Expr
+weakestPreCallM :: DT.TExpr -> EnvM DT.TExpr
 weakestPreCallM post = weakestPreCall post <$> get
 
-weakestPreCall :: D.Expr -> [D.Expr] -> D.Expr
+weakestPreCall :: DT.TExpr -> [DT.TExpr] -> DT.TExpr
 weakestPreCall post qs = 
   let 
-    nonOlds :: [D.Expr]
+    nonOlds :: [DT.TExpr]
     nonOlds = reverse $ sortBy subExprOrd $ Set.toList $ nonConstExprs $ nonOldExprs post
       
     existName :: Integer -> String
     existName i = "ex__" ++ show i
     
-    replaceUpdated :: D.Expr -> Integer -> D.Expr -> (Integer, D.Expr)
+    replaceUpdated :: DT.TExpr -> Integer -> DT.TExpr -> (Integer, DT.TExpr)
     replaceUpdated nonOldPart i inExpr = 
       let newExpr = replaceExprNoOld exName nonOldPart inExpr
-          exName = D.Var (existName i)
-      in (i + 1, newExpr) 
+          exName = DT.Var (existName i) (DT.texprType nonOldPart)
+      in (i + 1, newExpr)
    
-    useQuantVar :: Integer -> [D.Expr] -> D.Expr -> (Integer, [D.Expr]) 
+    useQuantVar :: Integer -> [DT.TExpr] -> DT.TExpr -> (Integer, [DT.TExpr]) 
     useQuantVar i exprs nonOld = mapAccumL (replaceUpdated nonOld) i exprs
     
-    (n, post': qs') = foldl (uncurry useQuantVar) (0, post:qs) nonOlds
+    (_n, post': qs') = foldl (uncurry useQuantVar) (0, post:qs) nonOlds
     
-    postImpliesQs = D.BinOpExpr D.Implies (unOld post') (dConj qs')
+    postImpliesQs = DT.BinOpExpr DT.Implies (unOld post') (dConj qs') D.BoolType
 
-    qvars = map (\name -> D.Decl name D.IntType) (Set.toList $ freeQVar postImpliesQs)
+    qvars = map (uncurry D.Decl) (Set.toList $ freeQVar postImpliesQs)
 
-  in D.ForAll qvars postImpliesQs
+  in DT.ForAll qvars postImpliesQs
 
 
-unOld :: D.Expr -> D.Expr
+unOld :: DT.TExpr -> DT.TExpr
 unOld = go
   where
-    go (D.Call name args) = D.Call name (map go args)
-    go (D.BinOpExpr op e1 e2) = D.BinOpExpr op (go e1) (go e2)
-    go (D.UnOpExpr D.Old e) = go e
-    go (D.UnOpExpr o e) = D.UnOpExpr o (go e)
-    go (D.ForAll ds e) = D.ForAll ds (go e)
+    go (DT.Call name args t) = DT.Call name (map go args) t
+    go (DT.BinOpExpr op e1 e2 t) = DT.BinOpExpr op (go e1) (go e2) t
+    go (DT.UnOpExpr D.Old e t) = go e
+    go (DT.UnOpExpr o e t) = DT.UnOpExpr o (go e) t
+    go (DT.ForAll ds e) = DT.ForAll ds (go e)
     go e = e
 
 -- | Get the free variables in an expression
-freeQVar :: D.Expr -> Set String
+freeQVar :: DT.TExpr -> Set (String, D.Type)
 freeQVar = go
   where
-    go (D.Call _ args) = Set.unions (map go args)
-    go (D.Var str) 
-       | isQVar str = Set.singleton str
+    go (DT.Call _ args t) = Set.unions (map go args)
+    go (DT.Var str t) 
+       | isQVar str = Set.singleton (str, t)
        | otherwise  = Set.empty
-    go (D.BinOpExpr _ e1 e2) = Set.union (go e1) (go e2)
-    go (D.UnOpExpr _ e) = go e
-    go (D.ForAll ds e)  =
-        let boundQVars = (filter isQVar . map D.declName) ds
+    go (DT.BinOpExpr _ e1 e2 t) = Set.union (go e1) (go e2)
+    go (DT.UnOpExpr _ e t) = go e
+    go (DT.ForAll ds e)  =
+        let boundQVars = 
+              filter ( \(n,t) -> isQVar n) $ map (\ (D.Decl n t) -> (n, t)) ds
         in Set.difference (go e) (Set.fromList boundQVars)
     go _ = Set.empty
 
@@ -197,64 +205,70 @@ stmtM s = do
 -- 
 -- This may be used to approximate the things that may have changed
 -- as specificed by a postcondition.
-nonOldExprs :: D.Expr -> Set D.Expr
+nonOldExprs :: DT.TExpr -> Set DT.TExpr
 nonOldExprs = 
   Set.filter (not .  isOld) . Set.filter (not . isVar) . properSubExprs
 
 -- | Is the demonL expression 'Old'? 
-isOld (D.UnOpExpr D.Old _) = True
+isOld (DT.UnOpExpr D.Old _ _) = True
 isOld _ = False
 
 -- | Is this a 'Var' AST node?
-isVar :: D.Expr -> Bool
-isVar (D.Var _) = True
+isVar :: DT.TExpr -> Bool
+isVar (DT.Var _ _) = True
 isVar _ = False
 
 
-nonConstExprs :: Set D.Expr -> Set D.Expr
+nonConstExprs :: Set DT.TExpr -> Set DT.TExpr
 nonConstExprs = 
- let isConst (D.LitInt _) = True
-     isConst (D.LitNull) = True
-     isConst (D.BinOpExpr _ _ _) = True
-     isConst (D.UnOpExpr _ _) = True
+ let isConst (DT.LitInt _) = True
+     isConst (DT.LitNull _) = True
+     isConst (DT.BinOpExpr _ _ _ _) = True
+     isConst (DT.UnOpExpr _ _ _) = True
      isConst _ = False
  in Set.filter (not . isConst)
 
 -- | Proper subexpressions of a given expression.
 -- This will surely break for cyclical ASTs.
-properSubExprs :: D.Expr -> Set D.Expr
+properSubExprs :: DT.TExpr -> Set DT.TExpr
 properSubExprs e = Set.delete e (subExprs e)
 
 -- | All subexpressions of a given expression
-subExprs :: D.Expr -> Set D.Expr
+subExprs :: DT.TExpr -> Set DT.TExpr
 subExprs = go
   where
-    go e@(D.Call _ args) = Set.insert e (Set.unions (map go args))
-    go e@(D.BinOpExpr _ e1 e2) = Set.insert e (Set.union (go e1) (go e2))
-    go e@(D.UnOpExpr _ subE) = Set.insert e (go subE)
+    go e@(DT.Call _ args t) = Set.insert e (Set.unions (map go args))
+    go e@(DT.BinOpExpr _ e1 e2 t) = Set.insert e (Set.union (go e1) (go e2))
+    go e@(DT.UnOpExpr _ subE t) = Set.insert e (go subE)
     go e = Set.singleton e
 
 -- | DemonL expression asserting that the given expression isn't null.
-dNeqNull :: Pos UnPosTExpr -> D.Expr
-dNeqNull e = D.BinOpExpr (D.RelOp D.Neq) (teToDCurr e) D.LitNull
+dNeqNull :: D.Type -> Pos UnPosTExpr -> DT.TExpr
+dNeqNull currT e  
+  | isBasic (texpr e) = DT.LitBool True
+  | otherwise = DT.BinOpExpr (DT.RelOp D.Neq t)
+                             (teToDCurr currT e) 
+                             (DT.LitNull t)
+                             D.BoolType
+  where t = fromType (T.texpr e)
 
 -- | Conjunction of a list of DemonL assertions.
-dConj :: [D.Expr] -> D.Expr
-dConj [] = D.LitBool True
-dConj es = foldr1 (D.BinOpExpr D.And) es
+dConj :: [DT.TExpr] -> DT.TExpr
+dConj [] = DT.LitBool True
+dConj es = foldr1 dand es
 
 -- | Take an expression and accumulate all preconditions
 -- and return them as DemonL expressions.
-preCond :: TExpr -> InterfaceReaderM [D.Expr]
-preCond = go . contents
+preCond :: D.Type -> TExpr -> InterfaceReaderM [DT.TExpr]
+preCond currT = go . contents
   where
     go' = go . contents
     go (T.Call trg name args _) = do
       callPreTExpr <- texprAssert featurePre trg name
-      let callPres = map (teToD (teToDCurr trg)) callPreTExpr
+      let callPres = map (teToD (teToDCurr currT trg)) callPreTExpr
       rest <- concatMapM go' (trg : args)
-      return (dNeqNull trg : rest ++ callPres)
-    go (T.Access trg _ _) = (dNeqNull trg :) `fmap` go' trg
+      return (dNeqNull currT trg : rest ++ callPres)
+    go (T.Access trg _ _) = (dNeqNull currT trg :) `fmap` go' trg
     go (T.Old e) = go' e
     go (T.CurrentVar _)      = return []
     go (T.Attached _ e _)    = go' e
@@ -272,6 +286,7 @@ preCond = go . contents
     go (T.LitArray _)  = error "preCond: unimplemented LitArray"
     go (T.Tuple _)     = error "preCond: unimplemented Tuple"
     go (T.Agent {}) = error "preCond: unimplemented Agent"
+    go te           = error $ "preCond: unimplemented " ++ show te
 
 -- | Take a statement and make a new block with the accumulated
 -- precondition (stored int the EnvM state) as a rely-call
@@ -280,39 +295,39 @@ meldCall :: UnPosTStmt -> EnvM UnPosTStmt
 meldCall s = do
   pre <- get
   
-  Env _ rely currType decls <- lift $ ask
-  let 
-    tuple x y = p0 $ T.Tuple [x, y]
-    curr = p0 $ T.CurrentVar currType
-
-    string :: String -> T.TExpr
-    string name = p0 $ T.LitString name
-
-    var name t = p0 $ T.Var name t
-
-    array :: [T.TExpr] -> T.TExpr
-    array = p0 . T.LitArray
-
+  Env _ rely currType resultType decls <- lift $ ask
+  let
+    curr = currVarT currType
+  
     relyCall :: [T.TExpr] -> T.TExpr
     relyCall es = p0 $ T.Call curr "rely_call" es NoType
 
-    precondStr = show $ untypeExprDoc $ dConj $ nub pre
-    relyStr    = show $ untypeExprDoc rely
+    preNoResult = map removeResult pre
+    precondStr = show $ typeExprDoc $ dConj $ nub preNoResult
+    relyStr    = show $ typeExprDoc rely
 
-    agent = p0 (T.Agent curr "extra_instr" [] NoType)
+    serializer = p0 $ T.CreateExpr (ClassType "SERIALIZER" []) "reset" []
 
-    declTup (Decl n t) = tuple (string n) (var n t)
+    declTup (Decl n t) = tupleT [ stringT n
+                                , typeString t
+                                , varT n t
+                                ]
 
+    typeString = stringT . classNameType
+    result = p0 $ T.ResultVar resultType
+  
     declArray :: T.TExpr
     declArray = 
-      array (tuple (string "this") curr : map declTup decls)
+      arrayT (tupleT [stringT "this", typeString currType, curr] : 
+              tupleT [stringT "res", typeString resultType, result] : 
+              map declTup decls)
 
     args :: [T.TExpr]
     args = [ p0 $ T.LitInt 0
            , declArray
-           , string precondStr
-           , string relyStr
-           , agent
+           , stringT precondStr
+           , stringT relyStr
+           , serializer
            ]
 
     relyCall' :: TStmt
@@ -320,11 +335,20 @@ meldCall s = do
   return (Block [relyCall', p0 s])
 
 
-p0 :: a -> Pos a
-p0 = attachEmptyPos
+removeResult :: DT.TExpr -> DT.TExpr
+removeResult withResult = go withResult
+  where
+    go (DT.Call name args t)     = DT.Call name (map go args) t
+    go (DT.Access trg name t)    = DT.Access (go trg) name t
+    go (DT.BinOpExpr op e1 e2 t) = DT.BinOpExpr op (go e1) (go e2) t
+    go (DT.UnOpExpr op e t)      = DT.UnOpExpr op (go e) t
+    go (DT.ForAll dcls e)        = DT.ForAll dcls (go e)
+    go (DT.ResultVar t)          = DT.Var "res" t
+    go e = e
+
 
 -- | Replace one expression with another in a list of DemonL
 -- expressions.
-replaceClause :: [D.Expr] -> TExpr -> TExpr -> [D.Expr]
-replaceClause clauses old new = 
-  map (replaceExpr (teToDCurr old) (teToDCurr new)) clauses  
+replaceClause :: D.Type -> TExpr -> TExpr -> [DT.TExpr] -> [DT.TExpr]
+replaceClause currT old new = 
+  map (replaceExpr  (teToDCurr currT new) (teToDCurr currT old))

@@ -5,26 +5,25 @@ note
 	revision: "$Revision$"
 
 class
-	WORK_QUEUE [G]
+	WORK_QUEUE
 
 create
 	make
 
-feature {NON_EMPTY}
+feature -- {NON_EMPTY}
 	set_done (d: BOOLEAN)
 		do
 			done := d
 		end
 
-	queue: S_QUEUE [G]
+	queue: S_QUEUE
 	mutex: MUTEX
 
-feature {NONE}
-	done_or_not_empty: NON_EMPTY [G]
-
+feature -- {NONE}
+	done_or_not_empty: NON_EMPTY
 
 feature
-	make (non_empty: NON_EMPTY [G])
+	make (non_empty: NON_EMPTY)
 		do
 			create queue
 			create mutex.make
@@ -46,7 +45,7 @@ feature
 			mutex.unlock
 		end
 
-	enqueue (req: G)
+	enqueue (req: REQUEST)
 		do
 			mutex.lock
 
@@ -56,10 +55,19 @@ feature
 			mutex.unlock
 		end
 
-	dequeue: G
+	dequeue2: REQUEST
+		do
+      queue.dequeue
+      Result := queue.item
+		ensure
+      rely: queue.count = old queue.count 
+      finished: done = (Result = Void)
+		end
+
+
+	dequeue: REQUEST
 		do
 			mutex.lock
-
 
 			-- loop because condition variables can have spurious wakeups
 			from
@@ -73,14 +81,19 @@ feature
 --				queue.remove
 --			end
 
-			Result := queue.item
 			queue.dequeue
+			Result := queue.item
 
 			mutex.unlock
 		ensure
-            rely: True or False
-            finished: done = (Result = Void)
+      rely: mutex.is_set
+--      finished: done = (Result = Void)
 		end
+
+  test
+    do
+      queue.dequeue
+    end
 
 	make_done
 		do

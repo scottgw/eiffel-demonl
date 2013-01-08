@@ -36,3 +36,8 @@ envLookup name (ClassEnv m) =
 
 envLookupType :: Typ -> ClassEnv body expr -> Maybe (AbsClas body expr)
 envLookupType t = envLookup (classNameType t)
+
+envLookupType' :: Typ -> ClassEnv body expr -> AbsClas body expr
+envLookupType' t env = case envLookupType t env of
+  Just c  -> c
+  Nothing -> error $ "envLookupType': class not found " ++ show t

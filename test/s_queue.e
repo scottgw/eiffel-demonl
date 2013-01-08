@@ -1,4 +1,4 @@
-class S_QUEUE [G]
+class S_QUEUE
 
 inherit
   ANY
@@ -13,26 +13,23 @@ feature
     end
 
 feature
-  enqueue (v: G)
+  enqueue (v: REQUEST)
     do
       queue_.extend (v)
     ensure
       count = old count + 1
     end
 
-  item: G
-    require
-      count > 0
-    do
-      Result := queue_.item
-    end
+  item: REQUEST
 
   dequeue
     require
       count > 0
     do
+      item := queue_.item
       queue_.remove
     ensure
+      item /= Void
       count = old count - 1
     end
 
@@ -50,7 +47,7 @@ feature
     end
 
 feature {NONE}
-  queue_: LINKED_QUEUE [G]
+  queue_: LINKED_QUEUE [REQUEST]
 
 end
 
