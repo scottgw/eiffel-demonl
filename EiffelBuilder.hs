@@ -1,5 +1,7 @@
 module EiffelBuilder where
 
+import Control.Lens hiding ((.=))
+
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 
@@ -54,9 +56,10 @@ varT name t = p0 $ T.Var name t
 -- modification functions
 
 addFeature cls feat = 
-  cls { featureMap = Map.insert (featureName feat) 
-                                (ExportedFeature Set.empty (SomeRoutine feat)) 
-                                (featureMap cls)
+  cls { featureMap = 
+           over fmRoutines (Map.insert (featureName feat) 
+                            (ExportedFeature Set.empty feat))
+                           (featureMap cls)
       }
 
 -- empty classes and routines to fill
@@ -75,7 +78,7 @@ emptyClass name =
       , inherit       = []
       , creates       = []
       , converts      = []
-      , featureMap    = Map.empty
+      , featureMap    = FeatureMap Map.empty Map.empty Map.empty
       , invnts        = []
       }
 
