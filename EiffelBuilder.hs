@@ -53,16 +53,11 @@ varT name t = p0 $ T.Var name t
 
 -- modification functions
 
-addFeatureToClause feat = FeatureClause [] [feat] [] []
-
 addFeature cls feat = 
-  cls { featureClauses = addFeatureToClause feat : featureClauses cls }
-
--- addFeature cls feat = 
---   cls { featureMap = Map.insert (featureName feat) 
---                                 (ExportedFeature Set.empty (SomeRoutine feat)) 
---                                 (featureMap cls)
---       }
+  cls { featureMap = Map.insert (featureName feat) 
+                                (ExportedFeature Set.empty (SomeRoutine feat)) 
+                                (featureMap cls)
+      }
 
 -- empty classes and routines to fill
 emptyClass name =
@@ -80,7 +75,7 @@ emptyClass name =
       , inherit       = []
       , creates       = []
       , converts      = []
-      , featureClauses = []
+      , featureMap    = Map.empty
       , invnts        = []
       }
 
