@@ -5,7 +5,7 @@ import Control.Applicative
 import Data.Binary
 import qualified Data.ByteString.Lazy as BS
 
-import qualified Data.Map as Map
+import qualified Data.HashMap.Strict as Map
 
 import Language.Eiffel.Parser
 import Language.Eiffel.Syntax as E hiding (select)
@@ -56,6 +56,7 @@ getDepsAndClass testClass file = do
           case clasM classInts cls of 
             Left err -> error $ "getDomain typechecking: " ++  err
             Right tCls -> do
+              putStrLn ("Type-checking " ++ show (length dependentIFaces) ++ " files")
               tis <- typeInterfaces dependentIFaces
               return (tis, tCls)
 

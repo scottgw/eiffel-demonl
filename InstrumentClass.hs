@@ -1,19 +1,22 @@
+{-# LANGUAGE OverloadedStrings #-}
 module InstrumentClass where
 
 import Control.Monad.Trans.State
 
-import Data.List (partition)
+import           Data.List (partition)
+import qualified Data.Text as Text
+import           Data.Text (Text)
 
 import qualified Language.DemonL.AST as D
 import qualified Language.DemonL.TypeCheck as DT
-import Language.Eiffel.Syntax as E hiding (select)
+import           Language.Eiffel.Syntax as E hiding (select)
 import qualified Language.Eiffel.Util as E
-import Language.Eiffel.TypeCheck.TypedExpr as T
+import           Language.Eiffel.TypeCheck.TypedExpr as T
 
-import ClassEnv
-import Domain
-import Util
-import Instrument
+import           ClassEnv
+import           Domain
+import           Util
+import           Instrument
 
 -- | Instrument a particular statement.
 stmt :: Typ -> Typ -> TInterEnv -> DT.TExpr -> [Decl] 
@@ -55,7 +58,7 @@ instrumentRoutine env typ r =
 
 -- | Instrument a class, but only the given routine name.
 instrument :: TInterEnv 
-              -> String 
+              -> Text
               -> AbsClas (RoutineBody TExpr) TExpr 
               -> AbsClas (RoutineBody TExpr) TExpr
 instrument env routName class_ = 
@@ -64,7 +67,7 @@ instrument env routName class_ =
   where
     simpleInherit n  = InheritClause (ClassType n []) [] [] [] [] []
     
-    addInherit :: [String] -> Inheritance
+    addInherit :: [Text] -> Inheritance
     addInherit cs = Inheritance False (map simpleInherit cs)
 
     withInherit c =

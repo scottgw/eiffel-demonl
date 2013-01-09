@@ -1,36 +1,41 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Test where
 
-import Data.Char
+import           Data.Char
+import qualified Data.HashMap.Strict as Map
+import qualified Data.Set as Set
+import qualified Data.Text as Text
+import           Data.Text (Text)
 
-import Language.DemonL.PrettyPrint
-
+import           Language.DemonL.PrettyPrint
 import qualified Language.Eiffel.PrettyPrint as PP
-import Language.Eiffel.TypeCheck.TypedExpr as T
+import           Language.Eiffel.TypeCheck.TypedExpr as T
 
-import System.FilePath
-import System.Environment
+import           System.FilePath
+import           System.Environment
 
-import ClassEnv
-import DomainGen
-import InstrumentClass
-import SerialGen
-import Driver (regenHeaderHere, regenHeader, flattenEnv, loadDepsAndClass)
+import           ClassEnv
+import           DomainGen
+import           InstrumentClass
+import           SerialGen
+import           Driver (regenHeaderHere, regenHeader, flattenEnv, loadDepsAndClass)
 
 
 main :: IO ()
 main = do
-  class_ : routine : _ <- getArgs
+  class_ : routine : _ <- fmap (map Text.pack) getArgs
   instrumentClass class_ routine
 
+instrumentClass :: Text -> Text -> IO ()
 instrumentClass class_ routine = do
   let
-    classLower = map toLower class_
+    classLower = Text.unpack $ Text.toLower class_
     classFile  = classLower <.> "e"
     instrumentedFile = classLower ++ "_instr" <.> "e"
 
-  -- produce headers (unconditionally for now)
-  putStrLn "Regenerate headers"
-  regenHeader class_ classFile
+  -- -- produce headers (unconditionally for now)
+  -- putStrLn "Regenerate headers"
+  -- regenHeader class_ classFile
 
   -- regenerate only the local headers (unconditionally for now)
   putStrLn "Regenerate local headers"
@@ -46,8 +51,8 @@ instrumentClass class_ routine = do
   let (dom, featMap) = domain routine typedClass flatEnv
   -- generate minimal domain
   putStrLn "Writing domain"
-  writeFile (class_ <.> "dmn") (show $ domainDoc typeExprDoc dom)
+  writeFile (Text.unpack class_ <.> "dmn") (show $ domainDoc typeExprDoc dom)
   
   -- generate the serialization class
   putStrLn "Generating serialization class"
-  generateSerializer "serializer_template.e" "serializer.e" flatEnv featMap
+  generateSerializer "serializer_template.e" "serializer.e" flatEnv (Map.map (Set.map Text.pack) featMap)

@@ -3,19 +3,22 @@ module Util (allPreConditions, texprAssert', texprAssert,
              InterfaceReaderM, runInterfaceReader, liftToEnv,
              concatMapM) where
 
-import Control.Applicative
+import           Control.Applicative
 
-import Control.Monad.Trans.Reader
-import Control.Monad.Identity
+import           Control.Monad.Trans.Reader
+import           Control.Monad.Identity
+
+import qualified Data.Text as Text
+import           Data.Text (Text)
 
 import qualified Language.DemonL.TypeCheck as DT
 
-import Language.Eiffel.Syntax as E hiding (select)
-import Language.Eiffel.Util
-import Language.Eiffel.Position
-import Language.Eiffel.TypeCheck.TypedExpr as T
+import           Language.Eiffel.Syntax as E hiding (select)
+import           Language.Eiffel.Util
+import           Language.Eiffel.Position
+import           Language.Eiffel.TypeCheck.TypedExpr as T
 
-import ClassEnv
+import           ClassEnv
 
 -- | Basic environment holding the typed interface environment,
 -- the current arguments, as well as the `Current` type.
@@ -140,18 +143,18 @@ replaceCurrents oldCurr newCurr = map (replaceTExpr oldCurr newCurr)
 -- readerLookup :: String -> InterfaceReaderM (Maybe (AbsClas EmptyBody TExpr))
 -- readerLookup typeName = envLookup typeName <$> ask
 
-readerLookup' :: String -> InterfaceReaderM (AbsClas EmptyBody TExpr)
+readerLookup' :: Text -> InterfaceReaderM (AbsClas EmptyBody TExpr)
 readerLookup' typeName = do
   e <- ask
   case envLookup typeName e of
     Nothing -> error $ "readerLookup': couldn't fine " ++ 
-                        typeName ++ 
-                        "\n environment: " ++ unlines (envKeys e)
+                        Text.unpack typeName ++ 
+                        "\n environment: " ++ unlines (map Text.unpack $ envKeys e)
     Just c -> return c
 
 texprAssert :: (FeatureEx TExpr -> [Clause TExpr]) 
             -> TExpr 
-            -> String 
+            -> Text
             -> InterfaceReaderM [T.TExpr]
 texprAssert select targ name = do
   let t@(ClassType typeName _) = texpr targ
@@ -162,7 +165,7 @@ texprAssert select targ name = do
   case findFeatureEx iface name of
     Just feat -> return $ replace feat
     Nothing -> error $ "texprPre: can't find feature: " ++ show targ ++ 
-                       "." ++ name    
+                       "." ++ Text.unpack name    
 
 tNeqNull :: Pos UnPosTExpr -> T.TExpr
 tNeqNull e = 

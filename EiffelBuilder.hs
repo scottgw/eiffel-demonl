@@ -1,13 +1,15 @@
 module EiffelBuilder where
 
-import Control.Lens hiding ((.=))
+import           Control.Lens hiding ((.=))
 
-import qualified Data.Map as Map
+import qualified Data.HashMap.Strict as Map
 import qualified Data.Set as Set
+import qualified Data.Text as Text
+import           Data.Text (Text)
 
-import Language.Eiffel.Syntax
-import Language.Eiffel.Position
-import Language.Eiffel.Util
+import           Language.Eiffel.Syntax
+import           Language.Eiffel.Position
+import           Language.Eiffel.Util
 
 import qualified Language.Eiffel.TypeCheck.TypedExpr as T
 
@@ -48,7 +50,7 @@ arrayT :: [T.TExpr] -> T.TExpr
 arrayT = p0 . T.LitArray
         
 
-stringT :: String -> T.TExpr
+stringT :: Text -> T.TExpr
 stringT = p0 . T.LitString
 
 varT name t = p0 $ T.Var name t

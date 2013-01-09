@@ -1,25 +1,26 @@
+{-# LANGUAGE OverloadedStrings #-}
 module SerialGen (generateSerializer) where
 
-import qualified  Data.Set as Set
-import Data.Set (Set)
+import qualified Data.Set as Set
+import           Data.Set (Set)
+import qualified Data.HashMap.Strict as Map
+import qualified Data.Text as Text
+import           Data.Text (Text)
 
-import qualified  Data.Map as Map
-import Data.Map (Map)
-
-import Language.Eiffel.Parser
+import           Language.Eiffel.Parser
 import qualified Language.Eiffel.PrettyPrint as PP
-import Language.Eiffel.Syntax
-import Language.Eiffel.Util
+import           Language.Eiffel.Syntax
+import           Language.Eiffel.Util
  
-import ClassEnv
-import EiffelBuilder
+import           ClassEnv
+import           EiffelBuilder
 
 -- | Generate the serializer code given the template Eiffel class
 -- the typing environment, and the queries to serialize (given as a map).
 generateSerializer :: FilePath                -- ^ Template file path
                       -> FilePath             -- ^ Output file path
                       -> TInterEnv            -- ^ Typing environment
-                      -> Map Typ (Set String) -- ^ Map of features to serialize 
+                      -> Map Typ (Set Text) -- ^ Map of features to serialize 
                       -> IO ()
 generateSerializer inFile outFile env featMap = do
   clsEi <- parseClassFile inFile
@@ -31,18 +32,18 @@ generateSerializer inFile outFile env featMap = do
              clsEi
   writeFile outFile (show $ PP.toDoc cls')
 
-addSerializerRoutine :: TInterEnv -> Map Typ (Set String) -> Clas -> Clas
+addSerializerRoutine :: TInterEnv -> Map Typ (Set Text) -> Clas -> Clas
 addSerializerRoutine env featMap cls =
   addFeature cls (serializeRoutine env featMap)
 
-serializeRoutine :: TInterEnv -> Map Typ (Set String) -> Routine
+serializeRoutine :: TInterEnv -> Map Typ (Set Text) -> Routine
 serializeRoutine env featMap = 
     (emptyRoutine "serialize_")
         { routineArgs = [Decl "obj" anyType, Decl "name" (ClassType "STRING" [])]
         , routineImpl = RoutineBody [] [] (serializeMap env featMap)
         }
 
-serializeMap :: TInterEnv -> Map Typ (Set String) -> Stmt
+serializeMap :: TInterEnv -> Map Typ (Set Text) -> Stmt
 serializeMap env featMap = ifs elseIfs
   where 
     elseIfs = map (uncurry (condAndStmt env)) (Map.toList featMap)
@@ -52,7 +53,7 @@ serializeMap env featMap = ifs elseIfs
       , do_ [serializeType env type_ featNames])
 
 
-serializeType :: TInterEnv -> Typ -> Set String -> Stmt
+serializeType :: TInterEnv -> Typ -> Set Text -> Stmt
 serializeType env type_ featNames = 
   do_ (map (serializeAttr env type_) (Set.toList featNames))
 
@@ -77,7 +78,7 @@ serializeRef type_ featName resType =
       ]
 
 
-funcName type_ featName = eStr (classNameType type_ ++ "_" ++ featName)
+funcName type_ featName = eStr (Text.concat [classNameType type_, "_", featName])
 -- The unary function call as it would appear in demonL.
 funcNameParen type_ featName =
   funcName type_ featName .+ eStr "(" .+ name .+ eStr ")"

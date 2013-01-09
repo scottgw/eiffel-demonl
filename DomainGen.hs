@@ -1,36 +1,45 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 module DomainGen (domain) where
 
-import Data.List (nub)
+import           Control.Applicative
+import           Control.Monad.Identity
 
-import qualified Data.Map as Map
-import Data.Map (Map)
-
+import           Data.List (nub, foldl')
+import           Data.Hashable
+import qualified Data.HashMap.Strict as Map
 import qualified Data.Set as Set
-import Data.Set (Set)
+import           Data.Set (Set)
+import qualified Data.Text as Text
+import           Data.Text (Text)
 
 import qualified Language.DemonL.AST as D
 import qualified Language.DemonL.TypeCheck as DT
-import Language.Eiffel.Syntax as E hiding (select)
+import           Language.Eiffel.Syntax as E hiding (select)
 import qualified Language.Eiffel.Util as E
-import Language.Eiffel.Position
-import Language.Eiffel.TypeCheck.TypedExpr as T
+import           Language.Eiffel.Position
+import           Language.Eiffel.TypeCheck.TypedExpr as T
 
-import ClassEnv
-import Domain
-import Util
+import           ClassEnv
+import           Domain
+import           Util
+
+unionsWith f = foldl' (Map.unionWith f) Map.empty
+
+mapWithKey :: (k -> v1 -> v2) -> Map.HashMap k v1 -> Map.HashMap k v2
+mapWithKey f m = runIdentity $ Map.traverseWithKey (\ k v -> pure (f k v)) m
 
 -- | Generate the minimal domain and also the extra instrumentation
 -- class necessary for the nullary 
-domain :: String 
+domain :: Text
           -> AbsClas (RoutineBody TExpr) TExpr 
           -> TInterEnv 
           -> (D.Domain DT.TExpr, Map Typ (Set String))
 domain featureName clas flatEnv = (dom, onlyQueryMap)
   where       
     typeNameMap :: Map Typ (Set String)
-    typeNameMap = Map.unionsWith Set.union $ map (domActions flatEnv) exprs
+    typeNameMap = unionsWith Set.union $ map (domActions flatEnv) exprs
       where
         Just rout = E.findFeature clas featureName
         body = contents (routineBody (routineImpl rout))
@@ -51,12 +60,12 @@ domain featureName clas flatEnv = (dom, onlyQueryMap)
             (\typ names -> Set.union (argTypes flatEnv typ names)) 
             Set.empty
             typeNameMap
-    domainClasses = Map.mapWithKey (cutDownClass flatEnv) typeNameMapDummies
+    domainClasses = mapWithKey (cutDownClass flatEnv) typeNameMapDummies
 
-    onlyQueryMap = Map.mapWithKey (Set.filter . isQuery) typeNameMap
+    onlyQueryMap = mapWithKey (Set.filter . isQuery) typeNameMap
       where
         isQuery typ name = 
-          E.featureResult (getFeatureEx flatEnv typ name) /= NoType
+          E.featureResult (getFeatureEx flatEnv typ (Text.pack name)) /= NoType
 
     dom = makeDomain $ Map.elems domainClasses
     
@@ -99,7 +108,7 @@ getFeatureEx env typ name =
 argTypes :: TInterEnv -> Typ -> Set String -> Set Typ
 argTypes env classTyp fnames = allFeatTypes
   where
-    feats = map get (Set.toList fnames)
+    feats = map (get . Text.pack) (Set.toList fnames)
       where get = getFeatureEx env classTyp
     featTypes f = E.featureResult f : map declType (E.featureArgs f)
     allFeatTypes = 
@@ -142,10 +151,10 @@ domActions env e =
                 inds = clausesIndicators . E.featurePost
                 hasIndicator = Set.member ind . inds
                 modifyIndicators = filter hasIndicator routs
-            in Set.fromList (map (Action typ . E.featureName) modifyIndicators)
+            in Set.fromList (map (Action typ . Text.unpack . E.featureName) modifyIndicators)
       
 
-      fromSet :: (Ord k, Ord a) => Set (k, Set a) -> Map k (Set a)
+      fromSet :: (Hashable k, Ord k, Ord a) => Set (k, Set a) -> Map k (Set a)
       fromSet = Map.fromListWith Set.union . Set.toList
             
       queriesAndRoutines =  Map.unionWith Set.union
@@ -171,9 +180,9 @@ exprIndicators = go'
         go (T.Call trg name args t) = 
           if E.isBasic (texpr trg) 
           then argPairs
-          else Set.insert (Indicator (texpr trg) name t) argPairs
+          else Set.insert (Indicator (texpr trg) (Text.unpack name) t) argPairs
           where argPairs = Set.unions (map exprIndicators (trg : args))
-        go (T.Access trg name t) = Set.fromList [Indicator (texpr trg) name t]
+        go (T.Access trg name t) = Set.fromList [Indicator (texpr trg) (Text.unpack name) t]
         go (T.EqExpr _ e1 e2) = go' e1 `Set.union` go' e2
         go _ = Set.empty
 
@@ -184,7 +193,7 @@ cutDownClass flatEnv typ names =
         maybe (E.makeGenericStub (Generic (E.classNameType typ) [] Nothing))
               id 
               (envLookupType typ flatEnv)
-      featureNames  = map E.featureName 
+      featureNames  = map (Text.unpack . E.featureName)
                           (E.allFeatures clas :: [E.FeatureEx TExpr])
       undefineNames = Set.fromList featureNames Set.\\ names
-  in Set.fold E.undefineName clas undefineNames
+  in Set.fold (E.undefineName . Text.pack) clas undefineNames

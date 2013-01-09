@@ -1,16 +1,19 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Domain where
 
-import Data.Either
-import Data.Maybe
+import           Data.Either
+import           Data.Maybe
+import qualified Data.Text as Text
+import           Data.Text (Text)
 
-import Language.Eiffel.Syntax as E
-import Language.Eiffel.Util as E
-import Language.Eiffel.Position
-import Language.Eiffel.TypeCheck.TypedExpr as T
+import           Language.Eiffel.Syntax as E
+import           Language.Eiffel.Util as E
+import           Language.Eiffel.Position
+import           Language.Eiffel.TypeCheck.TypedExpr as T
 
 import qualified Language.DemonL.TypeCheck as DT
-import Language.DemonL.AST as D
-import Language.DemonL.Types as D
+import           Language.DemonL.AST as D
+import           Language.DemonL.Types as D
 
 makeDomain :: [AbsClas body TExpr] -> Domain DT.TExpr
 makeDomain = foldr mergeDomains (Domain [] [] []) . map fromClass
@@ -24,17 +27,17 @@ fromClass clas =
     let
       typeName = className clas
       attrs    = map (fromAttr typeName) (allAttributes clas)
-      struct   = Struct typeName []
+      struct   = Struct (Text.unpack typeName) []
       (prcds, funcs) = 
         partitionEithers $ map (fromRoutine clas) (allRoutines clas)
     in Domain [struct] prcds (attrs ++ funcs)
 
-fromAttr :: String -> Attribute TExpr -> Procedure DT.TExpr
+fromAttr :: Text -> Attribute TExpr -> Procedure DT.TExpr
 fromAttr typeName attr = prcd
   where
     E.Decl name type_ = attrDecl attr
-    prcd = Procedure (typeName ++ "_" ++ name)
-                     [this typeName]
+    prcd = Procedure (Text.unpack typeName ++ "_" ++ Text.unpack name)
+                     [this (Text.unpack typeName)]
                      (fromType type_)
                      [] -- no pre or post conditions for an attribute
                      []
@@ -42,30 +45,30 @@ fromAttr typeName attr = prcd
 fromType :: E.Typ -> D.Type
 fromType t | t == E.intType = D.IntType
            | t == E.boolType = D.BoolType
-fromType (ClassType name _) = StructType name []
+fromType (ClassType name _) = StructType (Text.unpack name) []
 fromType E.NoType = D.NoType
 fromType E.VoidType = StructType "NONE" []
 fromType t = error $ "fromType: " ++ show t
 
 fromDecl :: E.Decl -> D.Decl
-fromDecl (E.Decl n t) = D.Decl n (fromType t)
+fromDecl (E.Decl n t) = D.Decl (Text.unpack n) (fromType t)
 
 this :: String -> D.Decl
 this typeName = D.Decl "this" (StructType typeName [])
 
 thisDecl :: AbsClas body exp -> D.Decl
-thisDecl cls = this (className cls)
+thisDecl cls = this (Text.unpack $ className cls)
 
 fromClause :: D.Type -> E.Clause TExpr -> D.Clause DT.TExpr
 fromClause currType (E.Clause tagMb expr) = 
     let tag = fromMaybe "no_tag" tagMb
-    in D.Clause tag (teToDCurr currType expr)
+    in D.Clause (Text.unpack tag) (teToDCurr currType expr)
 
 fromRoutine :: AbsClas body TExpr 
                -> AbsRoutine abs TExpr 
                -> Either (Procedure DT.TExpr) (Procedure DT.TExpr)
 fromRoutine clas rtn = 
-    let prcd = Procedure (className clas ++ "_" ++ featureName rtn)
+    let prcd = Procedure (Text.unpack (className clas) ++ "_" ++ Text.unpack (featureName rtn))
                          (thisDecl clas : map fromDecl (routineArgs rtn))
                          (fromType $ featureResult rtn)
                          (map fromClause' $ contractClauses $ routineReq rtn)
@@ -88,7 +91,7 @@ teToD curr' te = go curr' (contents te)
       let dtrg = go' curr trg
           ClassType cn _ = texpr trg
           expr = 
-            DT.Call (cn ++ "_" ++ name) (dtrg : map (go' dtrg) args) (fromType t)
+            DT.Call (Text.unpack cn ++ "_" ++ Text.unpack name) (dtrg : map (go' dtrg) args) (fromType t)
           withBinOp o = DT.BinOpExpr o dtrg (go' curr $ head args)
       in if length args == 1
          then case cn of
@@ -118,7 +121,7 @@ teToD curr' te = go curr' (contents te)
     go curr (T.Box _ e)     = go' curr e
     go curr (T.Unbox _ e)   = go' curr e
     go curr (T.Cast _ e)    = go' curr e
-    go _curr (T.Var n t)     = DT.Var n (fromType t)
+    go _curr (T.Var n t)     = DT.Var (Text.unpack n) (fromType t)
     go _curr (T.ResultVar t) = DT.ResultVar (fromType t) 
     go _curr (T.LitInt i)    = DT.LitInt i
     go _curr (T.LitBool b)   = DT.LitBool b

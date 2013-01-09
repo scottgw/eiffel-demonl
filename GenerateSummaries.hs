@@ -2,7 +2,6 @@
 module GenerateSummaries where
 
 import Data.Either
-import Data.Map (Map)
 
 import Language.Eiffel.Syntax
 import Language.Eiffel.Parser

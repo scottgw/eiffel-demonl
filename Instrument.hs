@@ -1,31 +1,34 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Instrument  where
 
-import Control.Applicative
-import Control.Monad
-import Control.Monad.Trans.Reader
-import Control.Monad.Trans.State
-import Control.Monad.Trans
+import           Control.Applicative
+import           Control.Monad
+import           Control.Monad.Trans.Reader
+import           Control.Monad.Trans.State
+import           Control.Monad.Trans
 
-import Data.List
+import           Data.List
 import qualified Data.Set as Set
-import Data.Set (Set)
+import           Data.Set (Set)
+import qualified Data.Text as Text
+import           Data.Text (Text)
 
-import Debug.Trace
 
-import Language.Eiffel.Syntax as E hiding (select)
-import Language.Eiffel.Util
-import Language.Eiffel.Position
+import           Debug.Trace
 
-import Language.Eiffel.TypeCheck.TypedExpr as T
+import           Language.Eiffel.Syntax as E hiding (select)
+import           Language.Eiffel.Util
+import           Language.Eiffel.Position
+import           Language.Eiffel.TypeCheck.TypedExpr as T
 
 import qualified Language.DemonL.Types as D
 import qualified Language.DemonL.TypeCheck as DT
 import qualified Language.DemonL.AST as D
-import Language.DemonL.PrettyPrint
+import           Language.DemonL.PrettyPrint
 
-import Domain
-import Util
-import EiffelBuilder
+import           Domain
+import           Util
+import           EiffelBuilder
 
 -- | The state monad built on the reader, with the list of assertions
 -- for the weakest precondition.
@@ -303,8 +306,8 @@ meldCall s = do
     relyCall es = p0 $ T.Call curr "rely_call" es NoType
 
     preNoResult = map removeResult pre
-    precondStr = show $ typeExprDoc $ dConj $ nub preNoResult
-    relyStr    = show $ typeExprDoc rely
+    precondStr = Text.pack $ show $ typeExprDoc $ dConj $ nub preNoResult
+    relyStr    = Text.pack $ show $ typeExprDoc rely
 
     serializer = p0 $ T.CreateExpr (ClassType "SERIALIZER" []) "reset" []
 

@@ -1,19 +1,23 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module DepGen (depGen) where
 
-import Control.Monad
-import Control.Monad.Error
-import Control.Monad.Identity
-import Control.Monad.Reader
+import           Control.Monad
+import           Control.Monad.Error
+import           Control.Monad.Identity
+import           Control.Monad.Reader
 
-import Data.Char
+import           Data.Char
+import qualified Data.Text as Text
+import           Data.Text (Text)
 
-import Language.Eiffel.Syntax
-import Language.Eiffel.Util
+import           Language.Eiffel.Syntax
+import           Language.Eiffel.Util
 
-import Text.Parsec.Error
-import Text.Parsec.Pos
+import           Text.Parsec.Error
+import           Text.Parsec.Pos
 
-import ClassEnv
+import           ClassEnv
 
 type DepM = ErrorT ParseError (ReaderT InterEnv Identity)
 
@@ -34,9 +38,9 @@ depGen classMap name =
 depGen' :: ClassName -> [ClassOrGeneric] -> DepM [ClassOrGeneric]
 depGen' cn acc = do
   classMap <- ask
-  let classMb = envLookup (map toLower cn) classMap
+  let classMb = envLookup (Text.toLower cn) classMap
   newClass <- case classMb of
-    Nothing -> throwError (strMsg $ "couldn't find file for " ++ cn)
+    Nothing -> throwError (strMsg $ "couldn't find file for " ++ Text.unpack cn)
     Just clas -> return clas
   depClas newClass (Class newClass : acc)
 
